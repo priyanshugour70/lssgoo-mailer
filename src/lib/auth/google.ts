@@ -15,6 +15,8 @@ export type VerifiedGoogleIdentity = {
   sub: string;
   email: string;
   name: string | null;
+  firstName: string | null;
+  lastName: string | null;
   imageUrl: string | null;
 };
 
@@ -104,10 +106,14 @@ export async function verifyGoogleIdToken(input: {
   if (!email || !sub || !verified) {
     throw new AppError("Google account email is not verified", "unauthorized");
   }
+  const given = claimString(payload, "given_name");
+  const family = claimString(payload, "family_name");
   return {
     sub,
     email: email.toLowerCase(),
     name: claimString(payload, "name"),
+    firstName: given,
+    lastName: family,
     imageUrl: claimString(payload, "picture"),
   } satisfies VerifiedGoogleIdentity;
 }

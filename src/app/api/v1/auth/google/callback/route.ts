@@ -59,6 +59,8 @@ export async function GET(request: Request) {
       sub: identity.sub,
       email: identity.email,
       name: identity.name,
+      firstName: identity.firstName,
+      lastName: identity.lastName,
       imageUrl: identity.imageUrl,
     });
 

@@ -1,18 +1,7 @@
 "use client";
 
-import { WelcomeHero } from "@/components/dashboard/welcome-hero";
-import { LiveClockPanel } from "@/components/dashboard/live-clock";
-import { StatusGrid } from "@/components/dashboard/status-grid";
-import { useCurrentUser } from "@/hooks/auth/use-current-user";
+import { SaasDashboard } from "@/components/dashboard/saas-dashboard";
 
 export function SaaSWorkspace() {
-  const user = useCurrentUser();
-
-  return (
-    <div className="flex flex-col gap-5 pb-6">
-      <WelcomeHero user={user} />
-      <LiveClockPanel />
-      <StatusGrid />
-    </div>
-  );
+  return <SaasDashboard />;
 }

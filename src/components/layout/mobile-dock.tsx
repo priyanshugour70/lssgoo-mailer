@@ -2,53 +2,61 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Clock3Icon, HomeIcon, LogOutIcon } from "lucide-react";
-
-import { signOut } from "@/action/auth/sign-out";
+import {
+  HomeIcon,
+  MailIcon,
+  SendIcon,
+  Settings2Icon,
+  UsersIcon,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 
-const items = [
+const items: {
+  href: string;
+  label: string;
+  icon: typeof HomeIcon;
+  emphasize?: boolean;
+}[] = [
   { href: "/", label: "Home", icon: HomeIcon },
-  { href: "/#live-time", label: "Time", icon: Clock3Icon },
-] as const;
+  { href: "/contacts", label: "Contacts", icon: MailIcon },
+  { href: "/send", label: "Send", icon: SendIcon, emphasize: true },
+  { href: "/people", label: "People", icon: UsersIcon },
+  { href: "/setup", label: "Setup", icon: Settings2Icon },
+];
 
 export function MobileDock() {
   const pathname = usePathname();
 
   return (
     <nav
-      className="fixed inset-x-0 bottom-0 z-40 border-t bg-background/90 backdrop-blur-md md:hidden"
-      style={{ paddingBottom: "max(0.5rem, env(safe-area-inset-bottom))" }}
+      className="fixed inset-x-0 bottom-0 z-40 border-t border-border/80 bg-background/95 shadow-[0_-8px_32px_rgba(0,0,0,0.06)] backdrop-blur-lg md:hidden"
+      style={{ paddingBottom: "max(0.35rem, env(safe-area-inset-bottom))" }}
+      aria-label="Primary"
     >
-      <div className="mx-auto flex w-full max-w-lg items-stretch justify-around px-2 pt-2">
+      <div className="mx-auto flex w-full max-w-lg items-end justify-between px-1 pt-1.5">
         {items.map((item) => {
-          const active = item.href === "/" ? pathname === "/" : false;
+          const active =
+            item.href === "/"
+              ? pathname === "/"
+              : pathname === item.href || pathname.startsWith(`${item.href}/`);
           const Icon = item.icon;
           return (
             <Link
               key={item.href}
               href={item.href}
               className={cn(
-                "flex min-h-14 min-w-16 flex-1 flex-col items-center justify-center gap-1 rounded-xl text-xs font-medium transition-colors",
-                active
-                  ? "text-violet-600"
-                  : "text-muted-foreground hover:text-foreground",
+                "relative flex min-h-[3.25rem] min-w-[3rem] flex-1 flex-col items-center justify-center gap-0.5 rounded-2xl px-0.5 pb-1 text-[10px] font-semibold transition-colors",
+                active ? "text-brand-blue" : "text-muted-foreground",
+                item.emphasize &&
+                  "mx-0.5 -mt-3 min-h-14 min-w-14 flex-none rounded-2xl bg-brand-cocoa text-brand-paper shadow-md",
+                item.emphasize && active && "ring-2 ring-brand-green/50",
               )}
             >
-              <Icon className={cn("size-5", active && "text-violet-600")} />
-              {item.label}
+              <Icon className={cn("size-5", item.emphasize && "size-6")} />
+              <span>{item.label}</span>
             </Link>
           );
         })}
-        <form action={signOut} className="flex min-w-16 flex-1">
-          <button
-            type="submit"
-            className="flex min-h-14 w-full flex-col items-center justify-center gap-1 rounded-xl text-xs font-medium text-rose-600 transition-colors hover:text-rose-700"
-          >
-            <LogOutIcon className="size-5" />
-            Exit
-          </button>
-        </form>
       </div>
     </nav>
   );

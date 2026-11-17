@@ -14,19 +14,19 @@ const items = [
   {
     title: "Mobile ready",
     body: "Layouts and controls are sized for thumbs first.",
-    tone: "sky" as const,
+    tone: "blue" as const,
     icon: SmartphoneIcon,
   },
   {
     title: "Live session",
     body: "Your Google account is active on this device.",
-    tone: "emerald" as const,
+    tone: "green" as const,
     icon: BadgeCheckIcon,
   },
   {
     title: "SaaS workspace",
     body: "Cloud Postgres backs accounts and sessions.",
-    tone: "violet" as const,
+    tone: "matte" as const,
     icon: CloudIcon,
   },
 ];
@@ -52,7 +52,7 @@ export function StatusGrid() {
         </Card>
       ))}
       <Card
-        className="animate-in fade-in slide-in-from-bottom-2 border-none bg-gradient-to-br from-rose-500/10 via-violet-500/10 to-sky-500/10 shadow-sm duration-500 fill-mode-both sm:col-span-2 lg:col-span-3"
+        className="mailer-surface-panel animate-in fade-in slide-in-from-bottom-2 border border-border/60 shadow-sm duration-500 fill-mode-both sm:col-span-2 lg:col-span-3"
         style={{ animationDelay: "360ms" }}
       >
         <CardContent className="flex flex-col gap-2">

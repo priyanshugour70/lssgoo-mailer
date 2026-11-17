@@ -8,19 +8,19 @@ const features = [
     title: "Phone first",
     body: "Thumb-friendly controls and safe-area layouts.",
     icon: SmartphoneIcon,
-    tone: "sky" as const,
+    tone: "blue" as const,
   },
   {
     title: "Live time",
     body: "Clocks and session views follow your timezone.",
     icon: Clock3Icon,
-    tone: "amber" as const,
+    tone: "green" as const,
   },
   {
     title: "Secure sign-in",
     body: "Google OAuth for verified accounts only.",
     icon: ShieldCheckIcon,
-    tone: "emerald" as const,
+    tone: "matte" as const,
   },
 ];
 
@@ -30,7 +30,7 @@ export function SignInHero() {
       <div className="flex items-center gap-4">
         <MailerMark size="lg" />
         <div className="flex flex-col gap-1">
-          <p className="text-sm font-semibold tracking-wide text-violet-600 uppercase dark:text-violet-400">
+          <p className="text-sm font-semibold tracking-wide text-brand-blue uppercase">
             SaaS
           </p>
           <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">

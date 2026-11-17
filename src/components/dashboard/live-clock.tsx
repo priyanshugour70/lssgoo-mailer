@@ -14,7 +14,7 @@ export function LiveClockPanel() {
       className="animate-in fade-in slide-in-from-bottom-3 rounded-2xl border bg-card/80 p-4 shadow-sm backdrop-blur-sm duration-500 fill-mode-both"
     >
       <div className="flex items-start gap-3">
-        <IconWell icon={Clock3Icon} tone="amber" />
+        <IconWell icon={Clock3Icon} tone="green" />
         <div className="flex min-w-0 flex-1 flex-col gap-1">
           <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
             Local time

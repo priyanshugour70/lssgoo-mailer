@@ -3,11 +3,10 @@ import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const tones = {
-  sky: "bg-sky-500/15 text-sky-600 dark:text-sky-400",
-  violet: "bg-violet-500/15 text-violet-600 dark:text-violet-400",
-  emerald: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400",
-  amber: "bg-amber-500/15 text-amber-600 dark:text-amber-400",
-  rose: "bg-rose-500/15 text-rose-600 dark:text-rose-400",
+  blue: "bg-brand-blue-muted text-brand-blue",
+  green: "bg-brand-green-muted text-brand-green",
+  matte: "bg-brand-matte text-foreground",
+  black: "bg-foreground/8 text-foreground",
 } as const;
 
 export function IconWell({
