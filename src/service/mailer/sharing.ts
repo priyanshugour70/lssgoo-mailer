@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, eq, or } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 
 import { getDb } from "@/lib/db/client";
 import {
@@ -19,6 +19,29 @@ export async function createAccessRequest(
     throw new Error("You cannot request your own contacts.");
   }
   const db = getDb();
+  const [granted] = await db
+    .select({ id: contactAccessGrants.id })
+    .from(contactAccessGrants)
+    .where(
+      and(
+        eq(contactAccessGrants.ownerId, ownerId),
+        eq(contactAccessGrants.viewerId, requesterId),
+      ),
+    )
+    .limit(1);
+  if (granted) throw new Error("You already have access to this list.");
+  const [pending] = await db
+    .select({ id: contactAccessRequests.id })
+    .from(contactAccessRequests)
+    .where(
+      and(
+        eq(contactAccessRequests.ownerId, ownerId),
+        eq(contactAccessRequests.requesterId, requesterId),
+        eq(contactAccessRequests.status, "pending"),
+      ),
+    )
+    .limit(1);
+  if (pending) throw new Error("A request is already waiting for approval.");
   const [row] = await db
     .insert(contactAccessRequests)
     .values({
@@ -136,10 +159,6 @@ export async function listSharedContacts(viewerId: string) {
     .from(contactAccessGrants)
     .innerJoin(contacts, eq(contacts.ownerId, contactAccessGrants.ownerId))
     .innerJoin(users, eq(users.id, contactAccessGrants.ownerId))
-    .where(
-      or(
-        eq(contactAccessGrants.viewerId, viewerId),
-        eq(contactAccessGrants.ownerId, viewerId),
-      ),
-    );
+    .where(eq(contactAccessGrants.viewerId, viewerId))
+    .orderBy(contacts.email);
 }

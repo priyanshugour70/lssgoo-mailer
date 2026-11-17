@@ -1,21 +1,50 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { BookUserIcon, MailIcon, SearchIcon } from "lucide-react";
+import { useCallback, useMemo, useState } from "react";
+import Link from "next/link";
+import {
+  BookUserIcon,
+  MoreHorizontalIcon,
+  PencilIcon,
+  PlusIcon,
+  SendIcon,
+  Trash2Icon,
+  UploadIcon,
+  UsersIcon,
+} from "lucide-react";
 
-import { PageHeader } from "@/components/mailer/page-header";
-import { EmptyState } from "@/components/mailer/ui/empty-state";
-import { FeedbackBanner } from "@/components/mailer/ui/feedback-banner";
-import { FormField } from "@/components/mailer/ui/form-field";
-import { ListSkeleton } from "@/components/mailer/ui/list-skeleton";
-import { MailerScreen } from "@/components/mailer/ui/screen";
-import { SegmentedControl } from "@/components/mailer/ui/segmented-control";
+import { EmptyState, ErrorState } from "@/components/app/empty-state";
+import { FormField } from "@/components/app/form-field";
+import { ListSkeleton } from "@/components/app/list-skeleton";
+import { Page, PageHeader } from "@/components/app/page-header";
+import { Pagination } from "@/components/app/pagination";
+import { useConfirm, useToast } from "@/components/app/providers";
+import { SearchInput } from "@/components/app/search-input";
+import { UrlTabs, useTab } from "@/components/app/url-tabs";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button, buttonVariants } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
-import { Spinner } from "@/components/ui/spinner";
+import { Textarea } from "@/components/ui/textarea";
 import { useMailerFetch } from "@/hooks/use-mailer-fetch";
+import { useUrlState } from "@/hooks/use-url-state";
+import { api, ApiError, errorMessage } from "@/lib/client/api";
+import { cn } from "@/lib/utils";
 
 type Contact = {
   id: string;
@@ -23,278 +52,662 @@ type Contact = {
   firstName: string | null;
   lastName: string | null;
   company: string | null;
+  notes: string | null;
 };
 
-type ContactsResponse = { contacts: Contact[] };
+type SharedRow = { contact: Contact; owner: { name: string; email: string } };
 
-type SharedResponse = {
-  shared: {
-    contact: Contact;
-    owner: { name: string; email: string };
-  }[];
-};
+const PAGE_SIZE = 25;
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function fullName(contact: Contact) {
+  return [contact.firstName, contact.lastName].filter(Boolean).join(" ");
+}
+
+function matches(contact: Contact, q: string) {
+  if (!q) return true;
+  const haystack = `${contact.email} ${fullName(contact)} ${contact.company ?? ""}`.toLowerCase();
+  return haystack.includes(q.toLowerCase());
+}
 
 export function ContactsWorkspace() {
-  const [tab, setTab] = useState<"mine" | "shared">("mine");
-  const [query, setQuery] = useState("");
-  const [email, setEmail] = useState("");
-  const [firstName, setFirstName] = useState("");
-  const [lastName, setLastName] = useState("");
-  const [company, setCompany] = useState("");
-  const [bulk, setBulk] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [feedback, setFeedback] = useState<{
-    tone: "success" | "error";
-    message: string;
-  } | null>(null);
+  const url = useUrlState();
+  const tab = useTab<"mine" | "shared">("mine");
+  const query = url.get("q");
+  const page = Math.max(Number(url.get("page", "1")) || 1, 1);
 
-  const {
-    data: mineData,
-    loading: mineLoading,
-    reload: reloadMine,
-  } = useMailerFetch<ContactsResponse>("/api/v1/contacts", {
-    skip: tab !== "mine",
-  });
-  const {
-    data: sharedData,
-    loading: sharedLoading,
-    reload: reloadShared,
-  } = useMailerFetch<SharedResponse>("/api/v1/contacts/shared", {
-    skip: tab !== "shared",
-  });
+  const mine = useMailerFetch<{ contacts: Contact[] }>("/api/v1/contacts");
+  const shared = useMailerFetch<{ shared: SharedRow[] }>("/api/v1/contacts/shared");
 
-  const contacts = mineData?.contacts ?? [];
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return contacts;
-    return contacts.filter(
-      (c) =>
-        c.email.toLowerCase().includes(q) ||
-        (c.company ?? "").toLowerCase().includes(q) ||
-        `${c.firstName ?? ""} ${c.lastName ?? ""}`.toLowerCase().includes(q),
-    );
-  }, [contacts, query]);
-
-  async function addContact() {
-    setBusy(true);
-    setFeedback(null);
-    const response = await fetch("/api/v1/contacts", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ email, firstName, lastName, company }),
-    });
-    setBusy(false);
-    if (!response.ok) {
-      setFeedback({ tone: "error", message: "Could not save this contact." });
-      return;
-    }
-    setEmail("");
-    setFirstName("");
-    setLastName("");
-    setCompany("");
-    setFeedback({ tone: "success", message: "Contact added to your workspace." });
-    await reloadMine();
-  }
-
-  async function importBulk() {
-    setBusy(true);
-    setFeedback(null);
-    const response = await fetch("/api/v1/contacts/bulk", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ raw: bulk }),
-    });
-    setBusy(false);
-    if (!response.ok) {
-      setFeedback({ tone: "error", message: "Bulk import failed." });
-      return;
-    }
-    const data = (await response.json()) as { count: number };
-    setBulk("");
-    setFeedback({
-      tone: "success",
-      message: `Imported ${data.count} email${data.count === 1 ? "" : "s"}.`,
-    });
-    await reloadMine();
-  }
+  const setQuery = useCallback((q: string) => url.set({ q, page: null }), [url]);
 
   return (
-    <MailerScreen>
+    <Page>
       <PageHeader
         title="Contacts"
-        description="People-oriented company emails. Every user keeps their own list; shared lists appear in the Shared tab."
+        description="Your audience. Each person keeps their own list; lists shared with you are read-only."
       />
 
-      <SegmentedControl
-        value={tab}
-        onChange={(value) => {
-          setTab(value);
-          setQuery("");
-        }}
+      <UrlTabs
+        label="Contact lists"
+        clear={["q", "page"]}
         options={[
-          { value: "mine", label: "My list" },
-          { value: "shared", label: "Shared" },
+          { value: "mine", label: "My contacts", count: mine.data?.contacts.length },
+          { value: "shared", label: "Shared with me", count: shared.data?.shared.length },
         ]}
       />
 
       {tab === "mine" ? (
-        <>
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-base">Add contact</CardTitle>
-            </CardHeader>
-            <CardContent className="grid gap-4">
-              <FormField label="Email" hint="Required — one row per person.">
-                <Input
-                  type="email"
-                  inputMode="email"
-                  autoComplete="email"
-                  className="h-12 text-base"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                />
-              </FormField>
-              <div className="grid gap-4 sm:grid-cols-2">
-                <FormField label="First name">
-                  <Input
-                    className="h-12"
-                    value={firstName}
-                    onChange={(e) => setFirstName(e.target.value)}
-                  />
-                </FormField>
-                <FormField label="Last name">
-                  <Input
-                    className="h-12"
-                    value={lastName}
-                    onChange={(e) => setLastName(e.target.value)}
-                  />
-                </FormField>
-              </div>
-              <FormField label="Company">
-                <Input
-                  className="h-12"
-                  value={company}
-                  onChange={(e) => setCompany(e.target.value)}
-                />
-              </FormField>
-              <Button
-                className="h-12 w-full text-base"
-                disabled={busy || !email.trim()}
-                onClick={() => void addContact()}
-              >
-                {busy ? <Spinner className="size-5" /> : "Save contact"}
-              </Button>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-base">Bulk import</CardTitle>
-            </CardHeader>
-            <CardContent className="grid gap-3">
-              <textarea
-                value={bulk}
-                onChange={(e) => setBulk(e.target.value)}
-                placeholder="Paste many emails — comma, semicolon, or new line"
-                className="min-h-36 w-full resize-y rounded-xl border border-input bg-background px-3 py-3 text-base leading-relaxed"
-              />
-              <Button
-                variant="outline"
-                className="h-12 w-full"
-                disabled={busy || !bulk.trim()}
-                onClick={() => void importBulk()}
-              >
-                Import all
-              </Button>
-            </CardContent>
-          </Card>
-
-          {feedback ? (
-            <FeedbackBanner tone={feedback.tone} message={feedback.message} />
-          ) : null}
-
-          <div className="relative">
-            <SearchIcon className="pointer-events-none absolute top-3.5 left-3 size-4 text-muted-foreground" />
-            <Input
-              className="h-12 pl-10 text-base"
-              placeholder="Search email, name, company"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-            />
-          </div>
-
-          {mineLoading ? (
-            <ListSkeleton />
-          ) : filtered.length === 0 ? (
-            <EmptyState
-              icon={MailIcon}
-              title="No contacts yet"
-              description="Add one above or paste a bulk list to start building your audience."
-            />
-          ) : (
-            <div className="flex flex-col gap-2">
-              <p className="text-sm font-medium text-muted-foreground">
-                {filtered.length} contact{filtered.length === 1 ? "" : "s"}
-              </p>
-              {filtered.map((contact) => (
-                <ContactCard key={contact.id} contact={contact} />
-              ))}
-            </div>
-          )}
-        </>
+        <MyContacts
+          contacts={mine.data?.contacts ?? []}
+          loading={mine.loading}
+          error={mine.error}
+          reload={mine.reload}
+          query={query}
+          page={page}
+          onQuery={setQuery}
+          onPage={(next) => url.set({ page: next === 1 ? null : String(next) })}
+        />
       ) : (
-        <>
-          <Button
-            variant="outline"
-            className="h-11 w-full"
-            onClick={() => void reloadShared()}
-          >
-            Refresh shared lists
-          </Button>
-          {sharedLoading ? (
-            <ListSkeleton />
-          ) : (sharedData?.shared.length ?? 0) === 0 ? (
-            <EmptyState
-              icon={BookUserIcon}
-              title="No shared contacts"
-              description="Request access from People — when someone accepts, their emails show here."
-            />
-          ) : (
-            <div className="flex flex-col gap-2">
-              {sharedData?.shared.map((row, index) => (
-                <Card key={`${row.contact.id}-${index}`} className="border-border/70">
-                  <CardContent className="flex flex-col gap-1 py-3">
-                    <div className="flex items-center justify-between gap-2">
-                      <p className="text-sm font-medium">{row.contact.email}</p>
-                      <Badge variant="secondary" className="shrink-0 text-[10px]">
-                        {row.owner.name}
-                      </Badge>
-                    </div>
-                    <p className="text-xs text-muted-foreground">
-                      {row.contact.company || "No company"} · via {row.owner.email}
-                    </p>
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
-          )}
-        </>
+        <SharedContacts
+          rows={shared.data?.shared ?? []}
+          loading={shared.loading}
+          error={shared.error}
+          reload={shared.reload}
+          query={query}
+          page={page}
+          onQuery={setQuery}
+          onPage={(next) => url.set({ page: next === 1 ? null : String(next) })}
+        />
       )}
-    </MailerScreen>
+    </Page>
   );
 }
 
-function ContactCard({ contact }: { contact: Contact }) {
-  const name = [contact.firstName, contact.lastName].filter(Boolean).join(" ");
+/* ───────────── My contacts ───────────── */
+
+function MyContacts({
+  contacts,
+  loading,
+  error,
+  reload,
+  query,
+  page,
+  onQuery,
+  onPage,
+}: {
+  contacts: Contact[];
+  loading: boolean;
+  error: string | null;
+  reload: () => Promise<void>;
+  query: string;
+  page: number;
+  onQuery: (q: string) => void;
+  onPage: (page: number) => void;
+}) {
+  const toast = useToast();
+  const confirm = useConfirm();
+  const [editing, setEditing] = useState<Contact | "new" | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+
+  const filtered = useMemo(() => contacts.filter((c) => matches(c, query)), [contacts, query]);
+  const pageCount = Math.max(Math.ceil(filtered.length / PAGE_SIZE), 1);
+  const safePage = Math.min(page, pageCount);
+  const visible = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
+  const allVisibleSelected = visible.length > 0 && visible.every((c) => selected.has(c.id));
+
+  function toggle(id: string) {
+    setSelected((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  async function remove(ids: string[], label: string) {
+    const ok = await confirm({
+      title: `Delete ${label}?`,
+      description:
+        "This removes them from your list. Past send history is kept. This can't be undone.",
+      confirmLabel: "Delete",
+      destructive: true,
+    });
+    if (!ok) return;
+    try {
+      const result = await api<{ removed: number }>("/api/v1/contacts/bulk", {
+        method: "DELETE",
+        body: { ids },
+      });
+      setSelected(new Set());
+      toast.success(`Deleted ${result.removed} contact${result.removed === 1 ? "" : "s"}.`);
+      await reload();
+    } catch (err) {
+      toast.error(errorMessage(err, "Could not delete."));
+    }
+  }
+
   return (
-    <Card className="border-border/70">
-      <CardContent className="flex flex-col gap-1 py-3">
-        <p className="text-sm font-semibold">{contact.email}</p>
-        {name ? <p className="text-xs text-foreground/80">{name}</p> : null}
-        <p className="text-xs text-muted-foreground">
-          {contact.company || "Independent / no company set"}
+    <>
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+        <div className="min-w-0 flex-1">
+          <SearchInput
+            label="Search contacts"
+            placeholder="Search email, name or company"
+            value={query}
+            onCommit={onQuery}
+          />
+        </div>
+        <div className="flex gap-2">
+          <Button variant="outline" className="flex-1 sm:flex-none" onClick={() => setImporting(true)}>
+            <UploadIcon data-icon="inline-start" />
+            Import
+          </Button>
+          <Button className="flex-1 sm:flex-none" onClick={() => setEditing("new")}>
+            <PlusIcon data-icon="inline-start" />
+            Add contact
+          </Button>
+        </div>
+      </div>
+
+      {selected.size > 0 ? (
+        <div
+          role="region"
+          aria-label="Bulk actions"
+          className="flex items-center justify-between gap-3 rounded-xl bg-primary px-3 py-2 text-primary-foreground"
+        >
+          <p className="text-sm font-medium tabular-nums">{selected.size} selected</p>
+          <div className="flex gap-1">
+            <Button
+              size="sm"
+              variant="ghost"
+              className="text-primary-foreground hover:bg-primary-foreground/15 hover:text-primary-foreground"
+              onClick={() => setSelected(new Set())}
+            >
+              Clear
+            </Button>
+            <Button
+              size="sm"
+              variant="destructive"
+              onClick={() => void remove([...selected], `${selected.size} contacts`)}
+            >
+              <Trash2Icon data-icon="inline-start" />
+              Delete
+            </Button>
+          </div>
+        </div>
+      ) : null}
+
+      {loading ? (
+        <ListSkeleton />
+      ) : error ? (
+        <ErrorState message={error} onRetry={() => void reload()} />
+      ) : contacts.length === 0 ? (
+        <EmptyState
+          icon={BookUserIcon}
+          title="No contacts yet"
+          description="Add people one at a time, or paste a list of emails to import them all at once."
+          action={
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={() => setImporting(true)}>
+                Import emails
+              </Button>
+              <Button onClick={() => setEditing("new")}>Add contact</Button>
+            </div>
+          }
+        />
+      ) : filtered.length === 0 ? (
+        <EmptyState
+          icon={BookUserIcon}
+          title="No matches"
+          description={`Nothing matches “${query}”. Try a different name, email or company.`}
+          action={
+            <Button variant="outline" onClick={() => onQuery("")}>
+              Clear search
+            </Button>
+          }
+        />
+      ) : (
+        <>
+          <Card className="gap-0 py-0">
+            <div className="flex items-center gap-3 border-b border-border px-3 py-2 text-xs font-medium text-muted-foreground">
+              <Checkbox
+                aria-label="Select all on this page"
+                checked={allVisibleSelected}
+                onChange={() =>
+                  setSelected((current) => {
+                    const next = new Set(current);
+                    for (const c of visible) {
+                      if (allVisibleSelected) next.delete(c.id);
+                      else next.add(c.id);
+                    }
+                    return next;
+                  })
+                }
+              />
+              <span className="flex-1">Contact</span>
+              <span className="hidden w-48 md:block">Company</span>
+              <span className="w-9" />
+            </div>
+            <ul className="divide-y divide-border">
+              {visible.map((contact) => (
+                <li
+                  key={contact.id}
+                  className={cn(
+                    "flex items-center gap-3 px-3 py-2.5 transition-colors",
+                    selected.has(contact.id) && "bg-accent",
+                  )}
+                >
+                  <Checkbox
+                    aria-label={`Select ${contact.email}`}
+                    checked={selected.has(contact.id)}
+                    onChange={() => toggle(contact.id)}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setEditing(contact)}
+                    className="min-w-0 flex-1 text-left"
+                  >
+                    <span className="block truncate text-sm font-medium">{contact.email}</span>
+                    <span className="block truncate text-xs text-muted-foreground">
+                      {[fullName(contact), contact.company].filter(Boolean).join(" · ") ||
+                        "No name or company"}
+                    </span>
+                  </button>
+                  <span className="hidden w-48 truncate text-sm text-muted-foreground md:block">
+                    {contact.company ?? "—"}
+                  </span>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger
+                      aria-label={`Actions for ${contact.email}`}
+                      className="inline-flex size-9 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted"
+                    >
+                      <MoreHorizontalIcon className="size-4" />
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="min-w-40">
+                      <DropdownMenuItem onClick={() => setEditing(contact)}>
+                        <PencilIcon data-icon="inline-start" />
+                        Edit
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        variant="destructive"
+                        onClick={() => void remove([contact.id], contact.email)}
+                      >
+                        <Trash2Icon data-icon="inline-start" />
+                        Delete
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </li>
+              ))}
+            </ul>
+          </Card>
+          <Pagination
+            page={safePage}
+            pageCount={pageCount}
+            total={filtered.length}
+            pageSize={PAGE_SIZE}
+            onPage={onPage}
+            noun="contacts"
+          />
+          <p className="text-sm text-muted-foreground">
+            Ready to reach them?{" "}
+            <Link href="/send" className={cn(buttonVariants({ variant: "link", size: "sm" }), "h-auto p-0")}>
+              <SendIcon data-icon="inline-start" /> Start a campaign
+            </Link>
+          </p>
+        </>
+      )}
+
+      <ContactDialog
+        contact={editing}
+        onClose={() => setEditing(null)}
+        onSaved={async () => {
+          setEditing(null);
+          await reload();
+        }}
+      />
+      <ImportDialog
+        open={importing}
+        onClose={() => setImporting(false)}
+        onImported={async () => {
+          setImporting(false);
+          await reload();
+        }}
+      />
+    </>
+  );
+}
+
+/* ───────────── Add / edit dialog ───────────── */
+
+type FormErrors = Partial<Record<"email", string>>;
+
+function ContactDialog({
+  contact,
+  onClose,
+  onSaved,
+}: {
+  contact: Contact | "new" | null;
+  onClose: () => void;
+  onSaved: () => Promise<void>;
+}) {
+  const open = contact !== null;
+  return (
+    <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
+      <DialogContent>
+        {/* Keyed so form state resets for every contact / reopen. */}
+        {contact !== null ? (
+          <ContactForm
+            key={contact === "new" ? "new" : contact.id}
+            contact={contact === "new" ? null : contact}
+            onSaved={onSaved}
+            onCancel={onClose}
+          />
+        ) : null}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function ContactForm({
+  contact,
+  onSaved,
+  onCancel,
+}: {
+  contact: Contact | null;
+  onSaved: () => Promise<void>;
+  onCancel: () => void;
+}) {
+  const toast = useToast();
+  const [values, setValues] = useState({
+    email: contact?.email ?? "",
+    firstName: contact?.firstName ?? "",
+    lastName: contact?.lastName ?? "",
+    company: contact?.company ?? "",
+    notes: contact?.notes ?? "",
+  });
+  const [errors, setErrors] = useState<FormErrors>({});
+  const [busy, setBusy] = useState(false);
+
+  const set = (key: keyof typeof values) => (event: { target: { value: string } }) =>
+    setValues((current) => ({ ...current, [key]: event.target.value }));
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    if (busy) return;
+    const email = values.email.trim();
+    if (!EMAIL_RE.test(email)) {
+      setErrors({ email: "Enter a valid email address, like name@company.com." });
+      return;
+    }
+    setErrors({});
+    setBusy(true);
+    try {
+      if (contact) {
+        await api(`/api/v1/contacts/${contact.id}`, {
+          method: "PATCH",
+          body: { ...values, email },
+        });
+        toast.success("Contact updated.");
+      } else {
+        await api("/api/v1/contacts", { method: "POST", body: { ...values, email } });
+        toast.success("Contact saved.");
+      }
+      await onSaved();
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409) {
+        setErrors({ email: err.message });
+      } else {
+        toast.error(errorMessage(err, "Could not save this contact."));
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <form onSubmit={submit} noValidate className="flex flex-col gap-4">
+      <DialogHeader>
+        <DialogTitle>{contact ? "Edit contact" : "Add contact"}</DialogTitle>
+        <DialogDescription>
+          {contact
+            ? "Changes apply to future campaigns."
+            : "Adding an email that already exists updates that person."}
+        </DialogDescription>
+      </DialogHeader>
+      <FormField label="Email" htmlFor="contact-email" error={errors.email}>
+        <Input
+          id="contact-email"
+          type="email"
+          inputMode="email"
+          autoComplete="off"
+          autoFocus
+          value={values.email}
+          onChange={set("email")}
+          aria-invalid={Boolean(errors.email)}
+          aria-describedby={errors.email ? "contact-email-error" : undefined}
+        />
+      </FormField>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <FormField label="First name" htmlFor="contact-first" optional>
+          <Input id="contact-first" autoComplete="off" value={values.firstName} onChange={set("firstName")} />
+        </FormField>
+        <FormField label="Last name" htmlFor="contact-last" optional>
+          <Input id="contact-last" autoComplete="off" value={values.lastName} onChange={set("lastName")} />
+        </FormField>
+      </div>
+      <FormField label="Company" htmlFor="contact-company" optional hint="Used to target campaigns by company.">
+        <Input id="contact-company" autoComplete="off" value={values.company} onChange={set("company")} />
+      </FormField>
+      <FormField label="Notes" htmlFor="contact-notes" optional>
+        <Textarea id="contact-notes" className="min-h-20" value={values.notes} onChange={set("notes")} />
+      </FormField>
+      <DialogFooter>
+        <Button type="button" variant="outline" onClick={onCancel}>
+          Cancel
+        </Button>
+        <Button type="submit" loading={busy}>
+          {contact ? "Save changes" : "Save contact"}
+        </Button>
+      </DialogFooter>
+    </form>
+  );
+}
+
+/* ───────────── Import dialog ───────────── */
+
+function ImportDialog({
+  open,
+  onClose,
+  onImported,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onImported: () => Promise<void>;
+}) {
+  return (
+    <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
+      <DialogContent>
+        {open ? <ImportForm onImported={onImported} onCancel={onClose} /> : null}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function ImportForm({
+  onImported,
+  onCancel,
+}: {
+  onImported: () => Promise<void>;
+  onCancel: () => void;
+}) {
+  const toast = useToast();
+  const [raw, setRaw] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const preview = useMemo(() => {
+    const seen = new Set<string>();
+    let invalid = 0;
+    for (const part of raw.split(/[\n,;]+/)) {
+      const email = part.trim().toLowerCase();
+      if (!email) continue;
+      if (!EMAIL_RE.test(email)) invalid += 1;
+      else seen.add(email);
+    }
+    return { valid: seen.size, invalid };
+  }, [raw]);
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    if (busy || preview.valid === 0) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await api<{ count: number; invalid: string[] }>("/api/v1/contacts/bulk", {
+        method: "POST",
+        body: { raw },
+      });
+      toast.success(
+        `Imported ${result.count} email${result.count === 1 ? "" : "s"}` +
+          (result.invalid.length ? ` · ${result.invalid.length} skipped as invalid.` : "."),
+      );
+      await onImported();
+    } catch (err) {
+      setError(errorMessage(err, "Import failed."));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <form onSubmit={submit} className="flex flex-col gap-4">
+      <DialogHeader>
+        <DialogTitle>Import emails</DialogTitle>
+        <DialogDescription>
+          Paste addresses separated by commas, semicolons or new lines. Duplicates are merged and
+          existing contacts keep their details.
+        </DialogDescription>
+      </DialogHeader>
+      <FormField label="Email addresses" htmlFor="import-raw" error={error}>
+        <Textarea
+          id="import-raw"
+          autoFocus
+          className="min-h-40"
+          placeholder={"ada@example.com\ngrace@example.com"}
+          value={raw}
+          onChange={(event) => setRaw(event.target.value)}
+        />
+      </FormField>
+      {raw.trim() ? (
+        <p className="flex flex-wrap gap-2 text-sm" aria-live="polite">
+          <Badge variant="success">{preview.valid} valid</Badge>
+          {preview.invalid > 0 ? <Badge variant="warning">{preview.invalid} will be skipped</Badge> : null}
         </p>
-      </CardContent>
-    </Card>
+      ) : null}
+      <DialogFooter>
+        <Button type="button" variant="outline" onClick={onCancel}>
+          Cancel
+        </Button>
+        <Button type="submit" loading={busy} disabled={preview.valid === 0}>
+          {preview.valid > 0 ? `Import ${preview.valid}` : "Import"}
+        </Button>
+      </DialogFooter>
+    </form>
+  );
+}
+
+/* ───────────── Shared with me ───────────── */
+
+function SharedContacts({
+  rows,
+  loading,
+  error,
+  reload,
+  query,
+  page,
+  onQuery,
+  onPage,
+}: {
+  rows: SharedRow[];
+  loading: boolean;
+  error: string | null;
+  reload: () => Promise<void>;
+  query: string;
+  page: number;
+  onQuery: (q: string) => void;
+  onPage: (page: number) => void;
+}) {
+  const filtered = useMemo(
+    () => rows.filter((row) => matches(row.contact, query) || row.owner.name.toLowerCase().includes(query.toLowerCase())),
+    [rows, query],
+  );
+  const pageCount = Math.max(Math.ceil(filtered.length / PAGE_SIZE), 1);
+  const safePage = Math.min(page, pageCount);
+  const visible = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
+
+  return (
+    <>
+      <SearchInput
+        label="Search shared contacts"
+        placeholder="Search email, name, company or owner"
+        value={query}
+        onCommit={onQuery}
+      />
+      {loading ? (
+        <ListSkeleton />
+      ) : error ? (
+        <ErrorState message={error} onRetry={() => void reload()} />
+      ) : rows.length === 0 ? (
+        <EmptyState
+          icon={UsersIcon}
+          title="Nothing shared with you yet"
+          description="Ask a teammate for access from People. Once they approve, their contacts appear here."
+          action={
+            <Link href="/people" className={buttonVariants({ variant: "outline" })}>
+              Go to People
+            </Link>
+          }
+        />
+      ) : filtered.length === 0 ? (
+        <EmptyState
+          icon={BookUserIcon}
+          title="No matches"
+          description={`Nothing matches “${query}”.`}
+          action={<Button variant="outline" onClick={() => onQuery("")}>Clear search</Button>}
+        />
+      ) : (
+        <>
+          <Card className="gap-0 py-0">
+            <ul className="divide-y divide-border">
+              {visible.map((row) => (
+                <li key={`${row.owner.email}-${row.contact.id}`} className="flex items-center gap-3 px-3 py-2.5">
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium">{row.contact.email}</p>
+                    <p className="truncate text-xs text-muted-foreground">
+                      {[fullName(row.contact), row.contact.company].filter(Boolean).join(" · ") ||
+                        "No name or company"}
+                    </p>
+                  </div>
+                  <Badge variant="neutral" className="max-w-32 shrink-0 truncate" title={row.owner.email}>
+                    {row.owner.name}
+                  </Badge>
+                </li>
+              ))}
+            </ul>
+          </Card>
+          <Pagination
+            page={safePage}
+            pageCount={pageCount}
+            total={filtered.length}
+            pageSize={PAGE_SIZE}
+            onPage={onPage}
+            noun="contacts"
+          />
+        </>
+      )}
+    </>
   );
 }

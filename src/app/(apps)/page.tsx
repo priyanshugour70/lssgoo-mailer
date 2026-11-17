@@ -1,7 +1,7 @@
-import { SaaSWorkspace } from "@/components/dashboard/saas-workspace";
+import { Overview } from "@/components/mailer/overview";
 
 export const instant = false;
 
 export default function HomePage() {
-  return <SaaSWorkspace />;
+  return <Overview />;
 }

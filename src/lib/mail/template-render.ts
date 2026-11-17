@@ -20,6 +20,7 @@ export function renderTemplate(
   source: string,
   recipient: TemplateRecipient,
   sender: { name: string; email: string },
+  options: { html?: boolean } = {},
 ) {
   const map: Record<string, string> = {
     firstName: recipient.firstName ?? "",
@@ -30,7 +31,15 @@ export function renderTemplate(
     senderEmail: sender.email,
   };
 
+  const escape = (value: string) =>
+    value
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+
   return source.replace(/\{\{\s*(\w+)\s*\}\}/g, (_match, key: string) => {
-    return map[key] ?? "";
+    const value = map[key] ?? "";
+    return options.html ? escape(value) : value;
   });
 }

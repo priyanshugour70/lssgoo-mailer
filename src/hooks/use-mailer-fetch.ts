@@ -1,37 +1,49 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
+import { api, errorMessage } from "@/lib/client/api";
+
+/**
+ * GET helper with stale-while-revalidate behaviour: data stays on screen while
+ * a refresh is in flight (`refreshing`), so lists never flash empty after a
+ * mutation. Aborts superseded requests.
+ */
 export function useMailerFetch<T>(path: string, options?: { skip?: boolean }) {
+  const skip = options?.skip ?? false;
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(!options?.skip);
+  const [loading, setLoading] = useState(!skip);
+  const [refreshing, setRefreshing] = useState(false);
+  const controller = useRef<AbortController | null>(null);
 
   const reload = useCallback(async () => {
-    setLoading(true);
+    controller.current?.abort();
+    const next = new AbortController();
+    controller.current = next;
+    setRefreshing(true);
     setError(null);
     try {
-      const response = await fetch(path);
-      if (!response.ok) {
-        const payload = (await response.json().catch(() => null)) as {
-          error?: string;
-        } | null;
-        throw new Error(payload?.error ?? `Request failed (${response.status})`);
-      }
-      const json = (await response.json()) as T;
+      const json = await api<T>(path, { signal: next.signal });
+      if (next.signal.aborted) return;
       setData(json);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong.");
-      setData(null);
+      if (next.signal.aborted) return;
+      setError(errorMessage(err));
     } finally {
-      setLoading(false);
+      if (!next.signal.aborted) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   }, [path]);
 
   useEffect(() => {
-    if (options?.skip) return;
+    if (skip) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void reload();
-  }, [reload, options?.skip]);
+    return () => controller.current?.abort();
+  }, [reload, skip]);
 
-  return { data, error, loading, reload };
+  return { data, error, loading, refreshing, reload };
 }

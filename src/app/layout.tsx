@@ -6,10 +6,7 @@ export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   viewportFit: "cover",
-  themeColor: [
-    { media: "(prefers-color-scheme: light)", color: "#f5f0e8" },
-    { media: "(prefers-color-scheme: dark)", color: "#2a2620" },
-  ],
+  themeColor: "#fbfaf8",
 };
 
 export const metadata: Metadata = {
@@ -17,7 +14,7 @@ export const metadata: Metadata = {
     default: "Lssgoo Mailer",
     template: "%s · Lssgoo Mailer",
   },
-  description: "Sign in to Lssgoo Mailer with Google.",
+  description: "Send personal email campaigns from your own mailbox.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

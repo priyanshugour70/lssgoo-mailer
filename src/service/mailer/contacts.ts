@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, desc, eq, ilike, inArray } from "drizzle-orm";
+import { and, desc, eq, ilike, inArray, sql } from "drizzle-orm";
 
 import { getDb } from "@/lib/db/client";
 import { contacts } from "@/lib/db/schema";
@@ -36,28 +36,85 @@ export async function listContactsByCompany(ownerId: string, companyFilter: stri
 export async function createContact(ownerId: string, input: ContactInput) {
   const db = getDb();
   const email = input.email.trim().toLowerCase();
+  const clean = (value?: string | null) => value?.trim() || null;
+  const values = {
+    firstName: clean(input.firstName),
+    lastName: clean(input.lastName),
+    company: clean(input.company),
+    notes: clean(input.notes),
+  };
+  // Only overwrite fields the caller actually provided, so re-importing a bare
+  // email never wipes details that were saved earlier.
+  const set: Partial<typeof values> & { updatedAt: Date } = {
+    updatedAt: new Date(),
+  };
+  for (const key of Object.keys(values) as (keyof typeof values)[]) {
+    if (values[key]) set[key] = values[key];
+  }
+  // The unique index may be on (owner_id, email) or (owner_id, lower(email))
+  // depending on how the database was provisioned, so ON CONFLICT can't target
+  // it reliably. Look up case-insensitively, then update or insert.
+  const [existing] = await db
+    .select({ id: contacts.id })
+    .from(contacts)
+    .where(and(eq(contacts.ownerId, ownerId), sql`lower(${contacts.email}) = ${email}`))
+    .limit(1);
+  if (existing) {
+    const [row] = await db
+      .update(contacts)
+      .set(set)
+      .where(eq(contacts.id, existing.id))
+      .returning();
+    return row;
+  }
+  try {
+    const [row] = await db
+      .insert(contacts)
+      .values({ ownerId, email, ...values })
+      .returning();
+    return row;
+  } catch (error) {
+    // Lost a race with a concurrent insert of the same address: update it.
+    const [row] = await db
+      .update(contacts)
+      .set(set)
+      .where(and(eq(contacts.ownerId, ownerId), sql`lower(${contacts.email}) = ${email}`))
+      .returning();
+    if (row) return row;
+    throw error;
+  }
+}
+
+export async function updateContact(
+  ownerId: string,
+  id: string,
+  input: Omit<ContactInput, "email"> & { email?: string },
+) {
+  const db = getDb();
+  const clean = (value?: string | null) => value?.trim() || null;
   const [row] = await db
-    .insert(contacts)
-    .values({
-      ownerId,
-      email,
-      firstName: input.firstName?.trim() || null,
-      lastName: input.lastName?.trim() || null,
-      company: input.company?.trim() || null,
-      notes: input.notes?.trim() || null,
+    .update(contacts)
+    .set({
+      ...(input.email ? { email: input.email.trim().toLowerCase() } : {}),
+      firstName: clean(input.firstName),
+      lastName: clean(input.lastName),
+      company: clean(input.company),
+      notes: clean(input.notes),
+      updatedAt: new Date(),
     })
-    .onConflictDoUpdate({
-      target: [contacts.ownerId, contacts.email],
-      set: {
-        firstName: input.firstName?.trim() || null,
-        lastName: input.lastName?.trim() || null,
-        company: input.company?.trim() || null,
-        notes: input.notes?.trim() || null,
-        updatedAt: new Date(),
-      },
-    })
+    .where(and(eq(contacts.id, id), eq(contacts.ownerId, ownerId)))
     .returning();
-  return row;
+  return row ?? null;
+}
+
+export async function deleteContacts(ownerId: string, ids: string[]) {
+  if (ids.length === 0) return 0;
+  const db = getDb();
+  const rows = await db
+    .delete(contacts)
+    .where(and(eq(contacts.ownerId, ownerId), inArray(contacts.id, ids)))
+    .returning({ id: contacts.id });
+  return rows.length;
 }
 
 export async function bulkCreateContacts(ownerId: string, rows: ContactInput[]) {
@@ -69,15 +126,24 @@ export async function bulkCreateContacts(ownerId: string, rows: ContactInput[]) 
   return created;
 }
 
-export async function parseBulkEmails(raw: string): Promise<ContactInput[]> {
-  const lines = raw.split(/[\n,;]+/);
-  const result: ContactInput[] = [];
-  for (const line of lines) {
-    const email = line.trim().toLowerCase();
-    if (!email || !email.includes("@")) continue;
-    result.push({ email });
+const EMAIL_PATTERN = /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/;
+
+export function parseBulkEmails(raw: string) {
+  const seen = new Set<string>();
+  const valid: ContactInput[] = [];
+  const invalid: string[] = [];
+  for (const part of raw.split(/[\n,;]+/)) {
+    const email = part.trim().toLowerCase();
+    if (!email) continue;
+    if (!EMAIL_PATTERN.test(email)) {
+      invalid.push(part.trim());
+      continue;
+    }
+    if (seen.has(email)) continue;
+    seen.add(email);
+    valid.push({ email });
   }
-  return result;
+  return { valid, invalid };
 }
 
 export async function getContactsByIds(ownerId: string, ids: string[]) {

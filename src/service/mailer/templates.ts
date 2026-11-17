@@ -49,3 +49,16 @@ export async function getTemplate(userId: string, templateId: string) {
     .limit(1);
   return row ?? null;
 }
+export async function deleteTemplate(userId: string, templateId: string) {
+  const db = getDb();
+  try {
+    const rows = await db
+      .delete(templates)
+      .where(and(eq(templates.userId, userId), eq(templates.id, templateId)))
+      .returning({ id: templates.id });
+    return rows.length > 0 ? ("deleted" as const) : ("not_found" as const);
+  } catch {
+    // campaigns reference templates with ON DELETE RESTRICT
+    return "in_use" as const;
+  }
+}

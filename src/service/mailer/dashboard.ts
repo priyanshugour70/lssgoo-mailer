@@ -29,10 +29,29 @@ export async function getDashboardPayload(userId: string) {
     .select({ isValid: smtpProfiles.isValid })
     .from(smtpProfiles)
     .where(eq(smtpProfiles.userId, userId));
-  const [sentRow] = await db
-    .select({ value: count() })
+  const sendTotals = await db
+    .select({ status: campaignSends.status, value: count() })
     .from(campaignSends)
-    .where(eq(campaignSends.userId, userId));
+    .where(eq(campaignSends.userId, userId))
+    .groupBy(campaignSends.status);
+  const sendCount = (status: string) =>
+    sendTotals.find((row) => row.status === status)?.value ?? 0;
+
+  const recentCampaigns = await db
+    .select({
+      id: campaigns.id,
+      name: campaigns.name,
+      status: campaigns.status,
+      totalRecipients: campaigns.totalRecipients,
+      sentCount: campaigns.sentCount,
+      failedCount: campaigns.failedCount,
+      skippedCount: campaigns.skippedCount,
+      createdAt: campaigns.createdAt,
+    })
+    .from(campaigns)
+    .where(eq(campaigns.userId, userId))
+    .orderBy(desc(campaigns.createdAt))
+    .limit(5);
 
   const sendsByDay = await db
     .select({
@@ -73,8 +92,11 @@ export async function getDashboardPayload(userId: string) {
       contacts: contactRow?.value ?? 0,
       templates: templateRow?.value ?? 0,
       smtpValidated: profiles.filter((p) => p.isValid).length,
-      totalSends: sentRow?.value ?? 0,
+      emailsSent: sendCount("sent"),
+      emailsFailed: sendCount("failed"),
+      emailsSkipped: sendCount("skipped"),
     },
+    recentCampaigns,
     sendsByDay,
     activeCampaigns: active,
     recentSends: recent,

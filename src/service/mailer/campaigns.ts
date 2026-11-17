@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, desc, eq } from "drizzle-orm";
+import { and, count, desc, eq, ilike, or } from "drizzle-orm";
 
 import { getDb } from "@/lib/db/client";
 import {
@@ -232,10 +232,12 @@ export async function runCampaign(userId: string, campaignId: string) {
     });
     const html =
       template.format === "html" && template.bodyHtml
-        ? renderTemplate(template.bodyHtml, recipient, {
-            name: sender.name,
-            email: sender.email,
-          })
+        ? renderTemplate(
+            template.bodyHtml,
+            recipient,
+            { name: sender.name, email: sender.email },
+            { html: true },
+          )
         : undefined;
     const text =
       template.bodyText || template.format === "text"
@@ -326,14 +328,65 @@ export async function runCampaign(userId: string, campaignId: string) {
   };
 }
 
-export async function listCampaignHistory(userId: string, limit = 30) {
+export type HistoryQuery = {
+  page?: number;
+  pageSize?: number;
+  status?: "sent" | "skipped" | "failed";
+  q?: string;
+};
+
+export async function listCampaignHistory(
+  userId: string,
+  query: HistoryQuery = {},
+) {
   const db = getDb();
-  return db
-    .select()
-    .from(campaignSends)
-    .where(eq(campaignSends.userId, userId))
-    .orderBy(desc(campaignSends.sentAt))
-    .limit(limit);
+  const pageSize = Math.min(Math.max(query.pageSize ?? 25, 1), 100);
+  const page = Math.max(query.page ?? 1, 1);
+  const search = query.q?.trim();
+  const base = [eq(campaignSends.userId, userId)];
+  if (search) {
+    const pattern = `%${search.replace(/[%_\\]/g, "\\$&")}%`;
+    base.push(
+      or(
+        ilike(campaignSends.recipientEmail, pattern),
+        ilike(campaignSends.subject, pattern),
+      )!,
+    );
+  }
+  const filtered = query.status
+    ? [...base, eq(campaignSends.status, query.status)]
+    : base;
+
+  const [rows, totals] = await Promise.all([
+    db
+      .select()
+      .from(campaignSends)
+      .where(and(...filtered))
+      .orderBy(desc(campaignSends.sentAt))
+      .limit(pageSize)
+      .offset((page - 1) * pageSize),
+    db
+      .select({ status: campaignSends.status, value: count() })
+      .from(campaignSends)
+      .where(and(...base))
+      .groupBy(campaignSends.status),
+  ]);
+
+  const counts = { sent: 0, skipped: 0, failed: 0 };
+  for (const row of totals) {
+    if (row.status in counts) counts[row.status as keyof typeof counts] = row.value;
+  }
+  const all = counts.sent + counts.skipped + counts.failed;
+  const total = query.status ? counts[query.status] : all;
+
+  return {
+    history: rows,
+    page,
+    pageSize,
+    total,
+    pageCount: Math.max(Math.ceil(total / pageSize), 1),
+    counts: { all, ...counts },
+  };
 }
 
 export async function listCampaigns(userId: string) {

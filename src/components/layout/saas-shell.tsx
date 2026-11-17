@@ -1,7 +1,7 @@
-import { MailerMark } from "@/components/brand/mailer-mark";
-import { MobileDock } from "@/components/layout/mobile-dock";
+import { AppProviders } from "@/components/app/providers";
+import { MobileDock, MobileTopBar } from "@/components/layout/mobile-nav";
+import { Sidebar } from "@/components/layout/sidebar";
 import { UserProvider } from "@/hooks/auth/use-current-user";
-import { ProfileMenu } from "@/components/layout/profile-menu";
 import type { CurrentUser } from "@/types/auth/principal";
 
 export function SaasShell({
@@ -11,33 +11,27 @@ export function SaasShell({
   children: React.ReactNode;
   user: CurrentUser;
 }) {
-  const userPromise = Promise.resolve(user);
-
   return (
-    <UserProvider userPromise={userPromise}>
-      <div className="saas-app-bg flex min-h-svh flex-col">
-        <header className="mailer-header sticky top-0 z-30">
-          <div
-            className="mx-auto flex w-full max-w-6xl items-center justify-between gap-3 px-4 py-3"
-            style={{ paddingTop: "max(0.75rem, env(safe-area-inset-top))" }}
+    <UserProvider userPromise={Promise.resolve(user)}>
+      <AppProviders>
+        <a
+          href="#main"
+          className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-toast focus:rounded-md focus:bg-primary focus:px-3 focus:py-2 focus:text-primary-foreground"
+        >
+          Skip to content
+        </a>
+        <Sidebar />
+        <div className="flex min-h-svh flex-col md:pl-sidebar">
+          <MobileTopBar />
+          <main
+            id="main"
+            className="mx-auto flex w-full max-w-5xl flex-1 flex-col px-4 py-5 pb-[calc(var(--spacing-dock)+env(safe-area-inset-bottom)+1.5rem)] md:px-8 md:py-8 md:pb-10"
           >
-            <div className="flex items-center gap-3">
-              <MailerMark size="sm" />
-              <div className="flex flex-col">
-                <p className="text-sm font-semibold leading-tight">Lssgoo Mailer</p>
-                <p className="text-[11px] text-muted-foreground">SaaS workspace</p>
-              </div>
-            </div>
-            <ProfileMenu />
-          </div>
-        </header>
-
-        <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col px-4 py-5 pb-[calc(5.5rem+env(safe-area-inset-bottom))] md:px-8 md:py-8 md:pb-8">
-          {children}
-        </main>
-
+            {children}
+          </main>
+        </div>
         <MobileDock />
-      </div>
+      </AppProviders>
     </UserProvider>
   );
 }

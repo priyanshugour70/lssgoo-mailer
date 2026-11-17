@@ -129,3 +129,16 @@ export async function getSmtpForSend(userId: string, profileId: string) {
     fromEmail: row.fromEmail,
   };
 }
+export async function deleteSmtpProfile(userId: string, profileId: string) {
+  const db = getDb();
+  try {
+    const rows = await db
+      .delete(smtpProfiles)
+      .where(and(eq(smtpProfiles.userId, userId), eq(smtpProfiles.id, profileId)))
+      .returning({ id: smtpProfiles.id });
+    return rows.length > 0 ? ("deleted" as const) : ("not_found" as const);
+  } catch {
+    // campaigns reference SMTP profiles with ON DELETE RESTRICT
+    return "in_use" as const;
+  }
+}

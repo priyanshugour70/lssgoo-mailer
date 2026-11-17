@@ -39,18 +39,18 @@ async function SignInAuthedRedirect(): Promise<null> {
 function SignInFallback() {
   return (
     <main
-      className="sign-in-bg flex min-h-svh flex-col justify-center px-4 py-10"
+      className="flex min-h-svh flex-col justify-center bg-background px-4 py-10"
       style={{
         paddingTop: "max(2.5rem, env(safe-area-inset-top))",
         paddingBottom: "max(2.5rem, env(safe-area-inset-bottom))",
       }}
     >
-      <div className="mx-auto flex w-full max-w-lg flex-col gap-6">
+      <div className="mx-auto flex w-full max-w-sm flex-col gap-8">
         <SignInHero />
-        <Card className="border-none bg-card/85 shadow-lg backdrop-blur-md">
+        <Card>
           <CardHeader>
             <CardTitle>Sign in</CardTitle>
-            <CardDescription>Loading…</CardDescription>
+            <CardDescription>Use your Google account.</CardDescription>
           </CardHeader>
           <CardContent>
             <GoogleSignIn />
@@ -69,19 +69,19 @@ async function SignInContent({
   const params = await searchParams;
   return (
     <main
-      className="sign-in-bg flex min-h-svh flex-col justify-center px-4 py-10"
+      className="flex min-h-svh flex-col justify-center bg-background px-4 py-10"
       style={{
         paddingTop: "max(2.5rem, env(safe-area-inset-top))",
         paddingBottom: "max(2.5rem, env(safe-area-inset-bottom))",
       }}
     >
-      <div className="mx-auto flex w-full max-w-lg flex-col gap-6">
+      <div className="mx-auto flex w-full max-w-sm flex-col gap-8">
         <SignInHero />
-        <Card className="animate-in fade-in zoom-in-95 border-none bg-card/85 shadow-lg backdrop-blur-md duration-500 fill-mode-both">
+        <Card className="animate-fade-up">
           <CardHeader>
             <CardTitle>Sign in</CardTitle>
             <CardDescription>
-              Google OAuth only. Any verified Google account can join.
+              Use your Google account. No password to remember.
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-4">

@@ -10,7 +10,7 @@ export function SignInError({ code }: { code: string | null }) {
   if (!code) return null;
   const message = messages[code] ?? "Sign-in failed. Try again.";
   return (
-    <Alert variant="destructive">
+    <Alert variant="destructive" aria-live="assertive">
       <AlertTitle>Could not sign in</AlertTitle>
       <AlertDescription>{message}</AlertDescription>
     </Alert>
