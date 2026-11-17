@@ -4,6 +4,7 @@ import { useCallback, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   BookUserIcon,
+  DownloadIcon,
   MoreHorizontalIcon,
   PencilIcon,
   PlusIcon,
@@ -40,7 +41,9 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
+import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { MAX_IMPORT, parseContacts } from "@/lib/contacts/parse";
 import { useMailerFetch } from "@/hooks/use-mailer-fetch";
 import { useUrlState } from "@/hooks/use-url-state";
 import { api, ApiError, errorMessage } from "@/lib/client/api";
@@ -58,6 +61,13 @@ type Contact = {
 type SharedRow = { contact: Contact; owner: { name: string; email: string } };
 
 const PAGE_SIZE = 25;
+type SortKey = "newest" | "email" | "name" | "company";
+const SORT_LABELS: Record<SortKey, string> = {
+  newest: "Newest first",
+  email: "Email A–Z",
+  name: "Name A–Z",
+  company: "Company A–Z",
+};
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function fullName(contact: Contact) {
@@ -75,6 +85,7 @@ export function ContactsWorkspace() {
   const tab = useTab<"mine" | "shared">("mine");
   const query = url.get("q");
   const page = Math.max(Number(url.get("page", "1")) || 1, 1);
+  const sort = url.get("sort", "newest") as SortKey;
 
   const mine = useMailerFetch<{ contacts: Contact[] }>("/api/v1/contacts");
   const shared = useMailerFetch<{ shared: SharedRow[] }>("/api/v1/contacts/shared");
@@ -105,6 +116,8 @@ export function ContactsWorkspace() {
           reload={mine.reload}
           query={query}
           page={page}
+          sort={sort}
+          onSort={(value) => url.set({ sort: value === "newest" ? null : value, page: null })}
           onQuery={setQuery}
           onPage={(next) => url.set({ page: next === 1 ? null : String(next) })}
         />
@@ -133,9 +146,13 @@ function MyContacts({
   reload,
   query,
   page,
+  sort,
+  onSort,
   onQuery,
   onPage,
 }: {
+  sort: SortKey;
+  onSort: (sort: SortKey) => void;
   contacts: Contact[];
   loading: boolean;
   error: string | null;
@@ -151,7 +168,13 @@ function MyContacts({
   const [importing, setImporting] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
-  const filtered = useMemo(() => contacts.filter((c) => matches(c, query)), [contacts, query]);
+  const filtered = useMemo(() => {
+    const list = contacts.filter((c) => matches(c, query));
+    if (sort === "newest") return list;
+    const key = (c: Contact) =>
+      (sort === "email" ? c.email : sort === "company" ? c.company ?? "\uffff" : fullName(c) || "\uffff").toLowerCase();
+    return [...list].sort((a, b) => key(a).localeCompare(key(b)));
+  }, [contacts, query, sort]);
   const pageCount = Math.max(Math.ceil(filtered.length / PAGE_SIZE), 1);
   const safePage = Math.min(page, pageCount);
   const visible = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
@@ -199,11 +222,34 @@ function MyContacts({
             onCommit={onQuery}
           />
         </div>
+        <Select
+          aria-label="Sort contacts"
+          value={sort}
+          onChange={(event) => onSort(event.target.value as SortKey)}
+          className="sm:w-40"
+        >
+          {(Object.keys(SORT_LABELS) as SortKey[]).map((key) => (
+            <option key={key} value={key}>
+              {SORT_LABELS[key]}
+            </option>
+          ))}
+        </Select>
         <div className="flex gap-2">
           <Button variant="outline" className="flex-1 sm:flex-none" onClick={() => setImporting(true)}>
             <UploadIcon data-icon="inline-start" />
             Import
           </Button>
+          {contacts.length > 0 ? (
+            <a
+              href="/api/v1/contacts/export"
+              download
+              aria-label="Export contacts as CSV"
+              className={cn(buttonVariants({ variant: "outline" }), "flex-1 sm:flex-none")}
+            >
+              <DownloadIcon data-icon="inline-start" />
+              Export
+            </a>
+          ) : null}
           <Button className="flex-1 sm:flex-none" onClick={() => setEditing("new")}>
             <PlusIcon data-icon="inline-start" />
             Add contact
@@ -545,35 +591,49 @@ function ImportForm({
 }) {
   const toast = useToast();
   const [raw, setRaw] = useState("");
+  const [guessNames, setGuessNames] = useState(true);
+  const [company, setCompany] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const preview = useMemo(() => {
-    const seen = new Set<string>();
-    let invalid = 0;
-    for (const part of raw.split(/[\n,;]+/)) {
-      const email = part.trim().toLowerCase();
-      if (!email) continue;
-      if (!EMAIL_RE.test(email)) invalid += 1;
-      else seen.add(email);
+  const result = useMemo(
+    () => (raw.trim() ? parseContacts(raw, { guessNames, company }) : null),
+    [raw, guessNames, company],
+  );
+  const valid = result?.contacts.length ?? 0;
+
+  async function loadFile(file: File) {
+    if (file.size > 2_000_000) {
+      setError("That file is larger than 2 MB. Split it into smaller files.");
+      return;
     }
-    return { valid: seen.size, invalid };
-  }, [raw]);
+    setError(null);
+    setRaw(await file.text());
+  }
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
-    if (busy || preview.valid === 0) return;
+    if (busy || valid === 0) return;
+    if (valid > MAX_IMPORT) {
+      setError(`Import up to ${MAX_IMPORT} contacts at a time.`);
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
-      const result = await api<{ count: number; invalid: string[] }>("/api/v1/contacts/bulk", {
+      const summary = await api<{
+        created: number;
+        existing: number;
+        updated: number;
+        invalid: string[];
+      }>("/api/v1/contacts/bulk", {
         method: "POST",
-        body: { raw },
+        body: { raw, guessNames, company: company.trim() || undefined },
       });
-      toast.success(
-        `Imported ${result.count} email${result.count === 1 ? "" : "s"}` +
-          (result.invalid.length ? ` · ${result.invalid.length} skipped as invalid.` : "."),
-      );
+      const parts = [`${summary.created} added`];
+      if (summary.existing) parts.push(`${summary.existing} already in your list`);
+      if (summary.invalid.length) parts.push(`${summary.invalid.length} skipped as invalid`);
+      toast.success(`Import complete: ${parts.join(" · ")}.`);
       await onImported();
     } catch (err) {
       setError(errorMessage(err, "Import failed."));
@@ -585,34 +645,91 @@ function ImportForm({
   return (
     <form onSubmit={submit} className="flex flex-col gap-4">
       <DialogHeader>
-        <DialogTitle>Import emails</DialogTitle>
+        <DialogTitle>Import contacts</DialogTitle>
         <DialogDescription>
-          Paste addresses separated by commas, semicolons or new lines. Duplicates are merged and
-          existing contacts keep their details.
+          Paste anything: separated by commas, spaces, semicolons or new lines. Formats like{" "}
+          <span className="font-mono text-xs">Jane Doe &lt;jane@acme.com&gt;</span> or a CSV with a
+          header row work too.
         </DialogDescription>
       </DialogHeader>
-      <FormField label="Email addresses" htmlFor="import-raw" error={error}>
+
+      <FormField label="Emails or CSV" htmlFor="import-raw" error={error}>
         <Textarea
           id="import-raw"
           autoFocus
-          className="min-h-40"
-          placeholder={"ada@example.com\ngrace@example.com"}
+          className="min-h-36"
+          placeholder={"john.doe@acme.com, jane.smith@globex.com\nbob@initech.com ada@example.org"}
           value={raw}
           onChange={(event) => setRaw(event.target.value)}
         />
       </FormField>
-      {raw.trim() ? (
-        <p className="flex flex-wrap gap-2 text-sm" aria-live="polite">
-          <Badge variant="success">{preview.valid} valid</Badge>
-          {preview.invalid > 0 ? <Badge variant="warning">{preview.invalid} will be skipped</Badge> : null}
-        </p>
+
+      <FormField label="Or upload a file" htmlFor="import-file" optional hint=".csv, .tsv or .txt up to 2 MB">
+        <Input
+          id="import-file"
+          type="file"
+          accept=".csv,.tsv,.txt,text/csv,text/plain"
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            if (file) void loadFile(file);
+          }}
+        />
+      </FormField>
+
+      <label className="flex min-h-11 cursor-pointer items-start gap-3 rounded-xl border border-border px-3 py-2.5 text-sm">
+        <Checkbox className="mt-0.5" checked={guessNames} onChange={(e) => setGuessNames(e.target.checked)} />
+        <span>
+          <span className="block font-medium">Guess names from addresses</span>
+          <span className="block text-xs text-muted-foreground">
+            john.doe@acme.com becomes John Doe. Team mailboxes like info@ are left blank, and
+            names you already saved are never overwritten.
+          </span>
+        </span>
+      </label>
+
+      <FormField label="Company for all" htmlFor="import-company" optional hint="Applied to rows that don't have one.">
+        <Input id="import-company" autoComplete="off" value={company} onChange={(e) => setCompany(e.target.value)} />
+      </FormField>
+
+      {result ? (
+        <div className="flex flex-col gap-2 rounded-xl bg-muted p-3 text-sm" aria-live="polite">
+          <p className="flex flex-wrap gap-2">
+            <Badge variant="success">{valid} to import</Badge>
+            {result.duplicates > 0 ? <Badge variant="neutral">{result.duplicates} duplicates merged</Badge> : null}
+            {result.invalid.length > 0 ? <Badge variant="warning">{result.invalid.length} invalid</Badge> : null}
+            {result.mode === "csv" ? <Badge variant="info">CSV detected</Badge> : null}
+          </p>
+          {valid > 0 ? (
+            <ul className="divide-y divide-border">
+              {result.contacts.slice(0, 5).map((c) => (
+                <li key={c.email} className="flex items-baseline justify-between gap-3 py-1.5">
+                  <span className="min-w-0 truncate font-medium">{c.email}</span>
+                  <span className="shrink-0 text-xs text-muted-foreground">
+                    {[c.firstName, c.lastName].filter(Boolean).join(" ") || "—"}
+                    {c.nameGuessed ? " · guessed" : ""}
+                  </span>
+                </li>
+              ))}
+              {valid > 5 ? (
+                <li className="pt-1.5 text-xs text-muted-foreground">and {valid - 5} more…</li>
+              ) : null}
+            </ul>
+          ) : null}
+          {result.invalid.length > 0 ? (
+            <p className="text-xs text-warning">
+              Skipped: {result.invalid.slice(0, 4).join(", ")}
+              {result.invalid.length > 4 ? ` +${result.invalid.length - 4} more` : ""}
+            </p>
+          ) : null}
+        </div>
       ) : null}
+
       <DialogFooter>
         <Button type="button" variant="outline" onClick={onCancel}>
           Cancel
         </Button>
-        <Button type="submit" loading={busy} disabled={preview.valid === 0}>
-          {preview.valid > 0 ? `Import ${preview.valid}` : "Import"}
+        <Button type="submit" loading={busy} disabled={valid === 0}>
+          {valid > 0 ? `Import ${valid}` : "Import"}
         </Button>
       </DialogFooter>
     </form>

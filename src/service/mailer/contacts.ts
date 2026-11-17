@@ -117,33 +117,65 @@ export async function deleteContacts(ownerId: string, ids: string[]) {
   return rows.length;
 }
 
-export async function bulkCreateContacts(ownerId: string, rows: ContactInput[]) {
-  const created = [];
+export type BulkContact = {
+  email: string;
+  firstName: string | null;
+  lastName: string | null;
+  company: string | null;
+  notes: string | null;
+};
+
+/**
+ * Batched import. New addresses are inserted in chunks; existing ones are
+ * matched case-insensitively and only have their *blank* fields filled, so a
+ * guessed or partial row never overwrites details the user already saved.
+ */
+export async function bulkImportContacts(ownerId: string, rows: BulkContact[]) {
+  const db = getDb();
+  const emails = rows.map((row) => row.email.toLowerCase());
+  const existing: (typeof contacts.$inferSelect)[] = [];
+  for (let i = 0; i < emails.length; i += 1000) {
+    const chunk = emails.slice(i, i + 1000);
+    existing.push(
+      ...(await db
+        .select()
+        .from(contacts)
+        .where(
+          and(
+            eq(contacts.ownerId, ownerId),
+            inArray(sql`lower(${contacts.email})`, chunk),
+          ),
+        )),
+    );
+  }
+  const existingByEmail = new Map(existing.map((row) => [row.email.toLowerCase(), row]));
+
+  const fresh = rows.filter((row) => !existingByEmail.has(row.email.toLowerCase()));
+  for (let i = 0; i < fresh.length; i += 500) {
+    await db
+      .insert(contacts)
+      .values(fresh.slice(i, i + 500).map((row) => ({ ownerId, ...row })))
+      .onConflictDoNothing();
+  }
+
+  let updated = 0;
   for (const row of rows) {
-    if (!row.email?.trim()) continue;
-    created.push(await createContact(ownerId, row));
+    const current = existingByEmail.get(row.email.toLowerCase());
+    if (!current) continue;
+    const patch: Partial<typeof contacts.$inferInsert> = {};
+    if (!current.firstName && row.firstName) patch.firstName = row.firstName;
+    if (!current.lastName && row.lastName) patch.lastName = row.lastName;
+    if (!current.company && row.company) patch.company = row.company;
+    if (!current.notes && row.notes) patch.notes = row.notes;
+    if (Object.keys(patch).length === 0) continue;
+    await db
+      .update(contacts)
+      .set({ ...patch, updatedAt: new Date() })
+      .where(eq(contacts.id, current.id));
+    updated += 1;
   }
-  return created;
-}
 
-const EMAIL_PATTERN = /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/;
-
-export function parseBulkEmails(raw: string) {
-  const seen = new Set<string>();
-  const valid: ContactInput[] = [];
-  const invalid: string[] = [];
-  for (const part of raw.split(/[\n,;]+/)) {
-    const email = part.trim().toLowerCase();
-    if (!email) continue;
-    if (!EMAIL_PATTERN.test(email)) {
-      invalid.push(part.trim());
-      continue;
-    }
-    if (seen.has(email)) continue;
-    seen.add(email);
-    valid.push({ email });
-  }
-  return { valid, invalid };
+  return { created: fresh.length, existing: existing.length, updated };
 }
 
 export async function getContactsByIds(ownerId: string, ids: string[]) {

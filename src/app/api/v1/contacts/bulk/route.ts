@@ -2,39 +2,55 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { requireApiUser } from "@/lib/api/require-user";
-import {
-  bulkCreateContacts,
-  deleteContacts,
-  parseBulkEmails,
-} from "@/service/mailer/contacts";
+import { MAX_IMPORT, parseContacts } from "@/lib/contacts/parse";
+import { bulkImportContacts, deleteContacts } from "@/service/mailer/contacts";
 
-const bodySchema = z.object({
-  raw: z.string().min(1),
+const importSchema = z.object({
+  raw: z.string().min(1).max(2_000_000),
+  guessNames: z.boolean().optional(),
+  company: z.string().max(200).optional(),
 });
 
 export async function POST(request: Request) {
   const auth = await requireApiUser();
   if (auth.response) return auth.response;
-  const json = await request.json();
-  const parsed = bodySchema.safeParse(json);
+  const parsed = importSchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) {
     return NextResponse.json({ error: "invalid_body" }, { status: 400 });
   }
-  const { valid, invalid } = parseBulkEmails(parsed.data.raw);
-  if (valid.length === 0) {
+
+  const result = parseContacts(parsed.data.raw, {
+    guessNames: parsed.data.guessNames,
+    company: parsed.data.company,
+  });
+  if (result.contacts.length === 0) {
     return NextResponse.json(
-      { error: "No valid email addresses found.", invalid },
+      { error: "No valid email addresses found.", invalid: result.invalid },
       { status: 400 },
     );
   }
-  const contacts = await bulkCreateContacts(auth.user.id, valid);
+  if (result.contacts.length > MAX_IMPORT) {
+    return NextResponse.json(
+      { error: `Import up to ${MAX_IMPORT} contacts at a time.` },
+      { status: 400 },
+    );
+  }
+
+  const summary = await bulkImportContacts(auth.user.id, result.contacts);
   return NextResponse.json(
-    { count: contacts.length, invalid, contacts },
+    {
+      count: result.contacts.length,
+      created: summary.created,
+      existing: summary.existing,
+      updated: summary.updated,
+      duplicates: result.duplicates,
+      invalid: result.invalid,
+    },
     { status: 201 },
   );
 }
 
-const deleteSchema = z.object({ ids: z.array(z.string().uuid()).min(1).max(500) });
+const deleteSchema = z.object({ ids: z.array(z.string().uuid()).min(1).max(1000) });
 
 export async function DELETE(request: Request) {
   const auth = await requireApiUser();

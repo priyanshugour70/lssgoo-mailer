@@ -186,7 +186,7 @@ export function Overview() {
                 <Card key={campaign.id}>
                   <CardContent className="flex flex-col gap-2">
                     <div className="flex items-center justify-between gap-3">
-                      <p className="truncate text-sm font-medium">{campaign.name}</p>
+                      <Link href={`/campaigns/${campaign.id}`} className="truncate text-sm font-medium hover:underline">{campaign.name}</Link>
                       <span className="text-xs text-muted-foreground tabular-nums">
                         {campaign.processedCount}/{total || "…"}
                       </span>
@@ -235,8 +235,8 @@ export function Overview() {
           <Section
             title="Recent campaigns"
             actions={
-              <Link href="/history" className="text-sm font-medium text-info hover:underline">
-                View history
+              <Link href="/campaigns" className="text-sm font-medium text-info hover:underline">
+                All campaigns
               </Link>
             }
           >
@@ -253,7 +253,8 @@ export function Overview() {
               ) : (
                 <ul className="divide-y divide-border">
                   {data?.recentCampaigns.map((campaign) => (
-                    <li key={campaign.id} className="flex items-center gap-3 px-4 py-3">
+                    <li key={campaign.id}>
+                     <Link href={`/campaigns/${campaign.id}`} className="flex items-center gap-3 px-4 py-3 transition-colors hover:bg-muted">
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-sm font-medium">{campaign.name}</p>
                         <p className="text-xs text-muted-foreground tabular-nums">
@@ -264,6 +265,7 @@ export function Overview() {
                         </p>
                       </div>
                       <StatusBadge status={campaign.status} />
+                     </Link>
                     </li>
                   ))}
                 </ul>

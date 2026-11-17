@@ -18,7 +18,7 @@ import {
 import { useCurrentUser } from "@/hooks/auth/use-current-user";
 import { cn } from "@/lib/utils";
 
-const dockHrefs = ["/", "/contacts", "/send", "/history"];
+const dockHrefs = ["/", "/contacts", "/send", "/campaigns"];
 const moreItems = navItems.filter((item) => !dockHrefs.includes(item.href));
 
 export function MobileTopBar() {

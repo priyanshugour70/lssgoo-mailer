@@ -62,3 +62,25 @@ export async function deleteTemplate(userId: string, templateId: string) {
     return "in_use" as const;
   }
 }
+
+export async function updateTemplate(
+  userId: string,
+  templateId: string,
+  input: TemplateInput,
+) {
+  const db = getDb();
+  const [row] = await db
+    .update(templates)
+    .set({
+      name: input.name.trim(),
+      format: input.format,
+      subject: input.subject,
+      bodyHtml: input.format === "html" ? input.bodyHtml ?? "" : null,
+      bodyText: input.format === "text" ? input.bodyText ?? "" : null,
+      pdfFileId: input.pdfFileId ?? null,
+      updatedAt: new Date(),
+    })
+    .where(and(eq(templates.userId, userId), eq(templates.id, templateId)))
+    .returning();
+  return row ?? null;
+}

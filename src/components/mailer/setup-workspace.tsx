@@ -2,10 +2,13 @@
 
 import { useRef, useState } from "react";
 import {
+  CopyIcon,
   FileTextIcon,
   MoreHorizontalIcon,
+  PencilIcon,
   PaperclipIcon,
   PlusIcon,
+  SendIcon,
   ServerIcon,
   ShieldCheckIcon,
   Trash2Icon,
@@ -39,7 +42,9 @@ import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { useMailerFetch } from "@/hooks/use-mailer-fetch";
+import { useCurrentUser } from "@/hooks/auth/use-current-user";
 import { api, errorMessage } from "@/lib/client/api";
+import { renderTemplate } from "@/lib/mail/template-render";
 import { formatRelative } from "@/lib/client/format";
 
 type SmtpProfile = {
@@ -356,7 +361,9 @@ function TemplatesSection({
 }) {
   const toast = useToast();
   const confirm = useConfirm();
-  const [creating, setCreating] = useState(false);
+  // `editing`: null closed · "new" · existing template (edit) · {copyOf} (duplicate)
+  const [editing, setEditing] = useState<Template | "new" | { copyOf: Template } | null>(null);
+  const [testing, setTesting] = useState<Template | null>(null);
 
   async function remove(template: Template) {
     const ok = await confirm({
@@ -378,7 +385,7 @@ function TemplatesSection({
   return (
     <>
       <div className="flex justify-end">
-        <Button onClick={() => setCreating(true)}>
+        <Button onClick={() => setEditing("new")}>
           <PlusIcon data-icon="inline-start" />
           New template
         </Button>
@@ -393,7 +400,7 @@ function TemplatesSection({
           icon={FileTextIcon}
           title="No templates yet"
           description="A template is the message you send. Personalise it with the recipient's name or company."
-          action={<Button onClick={() => setCreating(true)}>Create template</Button>}
+          action={<Button onClick={() => setEditing("new")}>Create template</Button>}
         />
       ) : (
         <Card className="gap-0 py-0">
@@ -424,7 +431,19 @@ function TemplatesSection({
                     >
                       <MoreHorizontalIcon className="size-4" />
                     </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end" className="min-w-40">
+                    <DropdownMenuContent align="end" className="min-w-48">
+                      <DropdownMenuItem onClick={() => setEditing(template)}>
+                        <PencilIcon data-icon="inline-start" />
+                        Edit
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => setEditing({ copyOf: template })}>
+                        <CopyIcon data-icon="inline-start" />
+                        Duplicate
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => setTesting(template)}>
+                        <SendIcon data-icon="inline-start" />
+                        Send test to me
+                      </DropdownMenuItem>
                       <DropdownMenuItem variant="destructive" onClick={() => void remove(template)}>
                         <Trash2Icon data-icon="inline-start" />
                         Delete
@@ -438,31 +457,118 @@ function TemplatesSection({
         </Card>
       )}
 
-      <Dialog open={creating} onOpenChange={setCreating}>
+      <Dialog open={editing !== null} onOpenChange={(open) => !open && setEditing(null)}>
         <DialogContent className="sm:max-w-xl">
-          {creating ? (
+          {editing !== null ? (
             <TemplateForm
-              onCancel={() => setCreating(false)}
+              key={editing === "new" ? "new" : "copyOf" in editing ? `copy-${editing.copyOf.id}` : editing.id}
+              initial={editing === "new" ? null : "copyOf" in editing ? editing.copyOf : editing}
+              mode={editing === "new" ? "create" : "copyOf" in editing ? "duplicate" : "edit"}
+              onCancel={() => setEditing(null)}
               onSaved={async () => {
-                setCreating(false);
+                setEditing(null);
                 await reload();
               }}
             />
           ) : null}
         </DialogContent>
       </Dialog>
+
+      <Dialog open={testing !== null} onOpenChange={(open) => !open && setTesting(null)}>
+        <DialogContent>
+          {testing ? <TestSendForm template={testing} onClose={() => setTesting(null)} /> : null}
+        </DialogContent>
+      </Dialog>
     </>
   );
 }
 
-function TemplateForm({ onCancel, onSaved }: { onCancel: () => void; onSaved: () => Promise<void> }) {
+function TestSendForm({ template, onClose }: { template: Template; onClose: () => void }) {
   const toast = useToast();
+  const user = useCurrentUser();
+  const { data, loading } = useMailerFetch<{ profiles: SmtpProfile[] }>("/api/v1/smtp-profiles");
+  const verified = (data?.profiles ?? []).filter((p) => p.isValid);
+  const [chosen, setChosen] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const profileId = chosen || verified[0]?.id || "";
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    if (busy || !profileId) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api(`/api/v1/templates/${template.id}/test`, { method: "POST", body: { smtpProfileId: profileId } });
+      toast.success(`Test sent to ${user.email}. Check your inbox.`);
+      onClose();
+    } catch (err) {
+      setError(errorMessage(err, "Could not send the test."));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <form onSubmit={submit} className="flex flex-col gap-4">
+      <DialogHeader>
+        <DialogTitle>Send a test</DialogTitle>
+        <DialogDescription>
+          “{template.name}” is sent only to <strong>{user.email}</strong>, filled with sample data.
+        </DialogDescription>
+      </DialogHeader>
+      {loading ? null : verified.length === 0 ? (
+        <p className="rounded-xl bg-warning-soft p-3 text-sm text-warning">
+          Verify a sender first (Senders tab), then you can send a test.
+        </p>
+      ) : (
+        <FormField label="Send from" htmlFor="test-smtp" error={error}>
+          <Select id="test-smtp" value={profileId} onChange={(e) => setChosen(e.target.value)}>
+            {verified.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.label} · {p.fromEmail}
+              </option>
+            ))}
+          </Select>
+        </FormField>
+      )}
+      <DialogFooter>
+        <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
+        <Button type="submit" loading={busy} disabled={!profileId}>Send test</Button>
+      </DialogFooter>
+    </form>
+  );
+}
+
+function TemplateForm({
+  initial,
+  mode,
+  onCancel,
+  onSaved,
+}: {
+  initial: Template | null;
+  mode: "create" | "edit" | "duplicate";
+  onCancel: () => void;
+  onSaved: () => Promise<void>;
+}) {
+  const toast = useToast();
+  const user = useCurrentUser();
   const bodyRef = useRef<HTMLTextAreaElement>(null);
-  const [name, setName] = useState("");
-  const [subject, setSubject] = useState("");
-  const [format, setFormat] = useState<"text" | "html">("text");
-  const [body, setBody] = useState("Hi {{firstName}},\n\n\n\nBest,\n{{senderName}}");
-  const [pdf, setPdf] = useState<{ id: string; name: string } | null>(null);
+  const initialFormat = initial?.format === "html" ? "html" : "text";
+  const [name, setName] = useState(
+    initial ? (mode === "duplicate" ? `${initial.name} (copy)` : initial.name) : "",
+  );
+  const [subject, setSubject] = useState(initial?.subject ?? "");
+  const [format, setFormat] = useState<"text" | "html">(initial ? initialFormat : "text");
+  const [body, setBody] = useState(
+    initial
+      ? ((initialFormat === "html" ? initial.bodyHtml : initial.bodyText) ?? "")
+      : "Hi {{firstName}},\n\n\n\nBest,\n{{senderName}}",
+  );
+  const [view, setView] = useState<"edit" | "preview">("edit");
+  const [pdf, setPdf] = useState<{ id: string; name: string } | null>(
+    initial?.pdfFileId ? { id: initial.pdfFileId, name: "Current attachment" } : null,
+  );
   const [uploading, setUploading] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
@@ -507,8 +613,8 @@ function TemplateForm({ onCancel, onSaved }: { onCancel: () => void; onSaved: ()
 
     setBusy(true);
     try {
-      await api("/api/v1/templates", {
-        method: "POST",
+      await api(mode === "edit" && initial ? `/api/v1/templates/${initial.id}` : "/api/v1/templates", {
+        method: mode === "edit" ? "PATCH" : "POST",
         body: {
           name: name.trim(),
           format,
@@ -518,7 +624,7 @@ function TemplateForm({ onCancel, onSaved }: { onCancel: () => void; onSaved: ()
           pdfFileId: pdf?.id ?? null,
         },
       });
-      toast.success("Template saved.");
+      toast.success(mode === "edit" ? "Template updated." : "Template saved.");
       await onSaved();
     } catch (err) {
       toast.error(errorMessage(err, "Could not save template."));
@@ -530,8 +636,14 @@ function TemplateForm({ onCancel, onSaved }: { onCancel: () => void; onSaved: ()
   return (
     <form onSubmit={submit} noValidate className="flex flex-col gap-4">
       <DialogHeader>
-        <DialogTitle>New template</DialogTitle>
-        <DialogDescription>Insert placeholders to personalise each email.</DialogDescription>
+        <DialogTitle>
+          {mode === "edit" ? "Edit template" : mode === "duplicate" ? "Duplicate template" : "New template"}
+        </DialogTitle>
+        <DialogDescription>
+          {mode === "edit"
+            ? "Changes apply to future sends. Past campaigns are unaffected."
+            : "Insert placeholders to personalise each email."}
+        </DialogDescription>
       </DialogHeader>
       <div className="grid gap-4 sm:grid-cols-[1fr_9rem]">
         <FormField label="Name" htmlFor="tpl-name" error={errors.name}>
@@ -547,28 +659,50 @@ function TemplateForm({ onCancel, onSaved }: { onCancel: () => void; onSaved: ()
       <FormField label="Subject" htmlFor="tpl-subject" error={errors.subject}>
         <Input id="tpl-subject" value={subject} onChange={(e) => setSubject(e.target.value)} aria-invalid={Boolean(errors.subject)} />
       </FormField>
-      <FormField label="Message" htmlFor="tpl-body" error={errors.body}>
-        <Textarea
-          id="tpl-body"
-          ref={bodyRef}
-          className="min-h-44 font-mono text-sm"
-          value={body}
-          onChange={(e) => setBody(e.target.value)}
-          aria-invalid={Boolean(errors.body)}
-        />
-      </FormField>
-      <div className="flex flex-wrap gap-1.5" aria-label="Insert placeholder">
-        {PLACEHOLDERS.map((token) => (
+      <div role="tablist" aria-label="Message view" className="flex gap-1 rounded-lg bg-muted p-1">
+        {(["edit", "preview"] as const).map((v) => (
           <button
-            key={token}
+            key={v}
             type="button"
-            onClick={() => insert(token)}
-            className="min-h-8 rounded-md border border-border bg-muted px-2 font-mono text-xs transition-colors hover:border-border-strong max-md:min-h-9"
+            role="tab"
+            aria-selected={view === v}
+            onClick={() => setView(v)}
+            className={`min-h-9 flex-1 rounded-md text-sm font-medium capitalize transition-colors ${
+              view === v ? "bg-card shadow-xs" : "text-muted-foreground"
+            }`}
           >
-            {`{{${token}}}`}
+            {v === "edit" ? "Write" : "Preview"}
           </button>
         ))}
       </div>
+      {view === "edit" ? (
+        <>
+          <FormField label="Message" htmlFor="tpl-body" error={errors.body}>
+            <Textarea
+              id="tpl-body"
+              ref={bodyRef}
+              className="min-h-44 font-mono text-sm"
+              value={body}
+              onChange={(e) => setBody(e.target.value)}
+              aria-invalid={Boolean(errors.body)}
+            />
+          </FormField>
+          <div className="flex flex-wrap gap-1.5" aria-label="Insert placeholder">
+            {PLACEHOLDERS.map((token) => (
+              <button
+                key={token}
+                type="button"
+                onClick={() => insert(token)}
+                className="min-h-8 rounded-md border border-border bg-muted px-2 font-mono text-xs transition-colors hover:border-border-strong max-md:min-h-9"
+              >
+                {`{{${token}}}`}
+              </button>
+            ))}
+          </div>
+        </>
+      ) : (
+        <TemplatePreviewPane format={format} subject={subject} body={body} sender={{ name: user.name, email: user.email }} />
+      )}
       <FormField label="PDF attachment" htmlFor="tpl-pdf" optional hint="Sent with every email using this template.">
         {pdf ? (
           <div className="flex items-center justify-between gap-2 rounded-lg border border-border px-3 py-2 text-sm">
@@ -595,8 +729,46 @@ function TemplateForm({ onCancel, onSaved }: { onCancel: () => void; onSaved: ()
       </FormField>
       <DialogFooter>
         <Button type="button" variant="outline" onClick={onCancel}>Cancel</Button>
-        <Button type="submit" loading={busy || uploading}>{uploading ? "Uploading…" : "Save template"}</Button>
+        <Button type="submit" loading={busy || uploading}>{uploading ? "Uploading…" : mode === "edit" ? "Save changes" : "Save template"}</Button>
       </DialogFooter>
     </form>
+  );
+}
+
+const SAMPLE = { email: "ada@example.com", firstName: "Ada", lastName: "Lovelace", company: "Analytical Engines" };
+
+function TemplatePreviewPane({
+  format,
+  subject,
+  body,
+  sender,
+}: {
+  format: "text" | "html";
+  subject: string;
+  body: string;
+  sender: { name: string; email: string };
+}) {
+  const renderedSubject = renderTemplate(subject, SAMPLE, sender);
+  return (
+    <div className="flex flex-col gap-2 rounded-xl border border-border">
+      <div className="border-b border-border px-3 py-2 text-sm">
+        <span className="text-muted-foreground">Subject: </span>
+        <span className="font-medium">{renderedSubject || "(empty)"}</span>
+        <p className="text-xs text-muted-foreground">Shown with sample data for {SAMPLE.firstName} {SAMPLE.lastName}.</p>
+      </div>
+      {format === "html" ? (
+        // Sandboxed: previews can't run scripts or navigate the app.
+        <iframe
+          title="Email preview"
+          sandbox=""
+          srcDoc={renderTemplate(body, SAMPLE, sender, { html: true })}
+          className="h-72 w-full rounded-b-xl bg-white"
+        />
+      ) : (
+        <pre className="max-h-72 overflow-auto px-3 pb-3 text-sm whitespace-pre-wrap">
+          {renderTemplate(body, SAMPLE, sender) || "(empty)"}
+        </pre>
+      )}
+    </div>
   );
 }

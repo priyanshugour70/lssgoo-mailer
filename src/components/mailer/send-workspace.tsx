@@ -214,7 +214,7 @@ function Wizard({
     setBusy(true);
     setSendError(null);
     try {
-      await api("/api/v1/campaigns", {
+      const created = await api<{ campaign: { id: string } }>("/api/v1/campaigns", {
         method: "POST",
         body: {
           name: draft.name.trim() || defaultName(),
@@ -228,8 +228,8 @@ function Wizard({
         },
       });
       clearDraft();
-      toast.success("Campaign started. Watch progress on Overview.");
-      router.push("/");
+      toast.success("Campaign started. Results appear here as emails go out.");
+      router.push(`/campaigns/${created.campaign.id}`);
     } catch (err) {
       setSendError(errorMessage(err, "Could not start the campaign."));
       setBusy(false);

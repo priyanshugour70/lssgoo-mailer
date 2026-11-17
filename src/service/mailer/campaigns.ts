@@ -8,6 +8,7 @@ import {
   campaignSends,
   campaigns,
   deliveryLedger,
+  templates,
   users,
   type contacts,
 } from "@/lib/db/schema";
@@ -15,7 +16,7 @@ import {
   contactToRecipient,
   renderTemplate,
 } from "@/lib/mail/template-render";
-import { sendPersonalMail } from "@/lib/mail/smtp-transport";
+import { createMailer } from "@/lib/mail/smtp-transport";
 
 import { getContactsByIds, listContacts, listContactsByCompany } from "./contacts";
 import { getUploadedFile } from "./files";
@@ -138,7 +139,14 @@ async function bumpCampaignProgress(
     .where(eq(campaigns.id, campaignId));
 }
 
-export async function runCampaign(userId: string, campaignId: string) {
+/** A run older than this with no completion is presumed killed (serverless timeout). */
+export const STALL_AFTER_MS = 6 * 60 * 1000;
+
+export async function runCampaign(
+  userId: string,
+  campaignId: string,
+  options: { resume?: boolean } = {},
+) {
   const db = getDb();
   const sender = await loadSender(userId);
   const [campaign] = await db
@@ -148,8 +156,17 @@ export async function runCampaign(userId: string, campaignId: string) {
     .limit(1);
 
   if (!campaign) return { error: "Campaign not found." as const };
+
   if (campaign.status === "running") {
-    return { error: "Campaign is already running." as const };
+    if (!options.resume) return { error: "Campaign is already running." as const };
+    const startedAt = campaign.startedAt?.getTime() ?? 0;
+    if (Date.now() - startedAt < STALL_AFTER_MS) {
+      return {
+        error: "This campaign is still sending. You can resume it if it hasn't moved in a few minutes." as const,
+      };
+    }
+  } else if (options.resume && campaign.status !== "failed") {
+    return { error: "Only stalled or failed campaigns can be resumed." as const };
   }
 
   const template = await getTemplate(userId, campaign.templateId);
@@ -158,7 +175,7 @@ export async function runCampaign(userId: string, campaignId: string) {
   const smtp = await getSmtpForSend(userId, campaign.smtpProfileId);
   if (!smtp) {
     return {
-      error: "SMTP profile is missing or not validated. Use Validate mail first.",
+      error: "SMTP profile is missing or not validated. Verify the sender in Setup first.",
     } as const;
   }
 
@@ -170,8 +187,25 @@ export async function runCampaign(userId: string, campaignId: string) {
   let attachmentPath: string | undefined;
   if (template.pdfFileId) {
     const file = await getUploadedFile(userId, template.pdfFileId);
-    if (file) {
-      attachmentPath = file.storagePath;
+    if (file) attachmentPath = file.storagePath;
+  }
+
+  // On resume, recipients that already succeeded (or were skipped) are not
+  // touched again; failed ones are retried.
+  const done = new Set<string>();
+  let sentCount = 0;
+  let skippedCount = 0;
+  let failedCount = 0;
+  if (options.resume) {
+    const prior = await db
+      .select({ email: campaignSends.recipientEmail, status: campaignSends.status })
+      .from(campaignSends)
+      .where(eq(campaignSends.campaignId, campaignId));
+    for (const row of prior) {
+      if (row.status === "sent") sentCount += 1;
+      else if (row.status === "skipped") skippedCount += 1;
+      else continue;
+      done.add(row.email.toLowerCase());
     }
   }
 
@@ -180,29 +214,24 @@ export async function runCampaign(userId: string, campaignId: string) {
     .set({
       status: "running",
       startedAt: new Date(),
+      completedAt: null,
       totalRecipients: recipients.length,
-      processedCount: 0,
-      sentCount: 0,
+      processedCount: sentCount + skippedCount,
+      sentCount,
       failedCount: 0,
-      skippedCount: 0,
+      skippedCount,
     })
     .where(eq(campaigns.id, campaignId));
 
-  const results: {
-    email: string;
-    status: "sent" | "failed" | "skipped";
-    error?: string;
-  }[] = [];
-  let sentCount = 0;
-  let failedCount = 0;
-  let skippedCount = 0;
+  const mailer = createMailer(smtp);
+  const senderInfo = { name: sender.name, email: sender.email };
 
-  for (const contact of recipients) {
-    const email = contact.email.toLowerCase();
+  try {
+    for (const contact of recipients) {
+      const email = contact.email.toLowerCase();
+      if (done.has(email)) continue;
 
-    if (campaign.skipAlreadySent) {
-      const sentBefore = await alreadySent(userId, template.id, email);
-      if (sentBefore) {
+      if (campaign.skipAlreadySent && (await alreadySent(userId, template.id, email))) {
         await db.insert(campaignSends).values({
           campaignId,
           userId,
@@ -214,117 +243,94 @@ export async function runCampaign(userId: string, campaignId: string) {
           errorMessage: "Already sent this template to this address.",
         });
         skippedCount += 1;
-        results.push({ email, status: "skipped", error: "Already sent." });
-        await bumpCampaignProgress(campaignId, {
-          processedCount: results.length,
-          sentCount,
-          failedCount,
-          skippedCount,
-        });
-        continue;
+      } else {
+        const recipient = contactToRecipient(contact);
+        const subject = renderTemplate(template.subject, recipient, senderInfo);
+        const html =
+          template.format === "html" && template.bodyHtml
+            ? renderTemplate(template.bodyHtml, recipient, senderInfo, { html: true })
+            : undefined;
+        const text =
+          template.bodyText || template.format === "text"
+            ? renderTemplate(template.bodyText ?? template.bodyHtml ?? "", recipient, senderInfo)
+            : undefined;
+
+        try {
+          const delivery = await mailer.send({
+            to: email,
+            subject,
+            html,
+            text,
+            attachments: attachmentPath
+              ? [{ filename: "attachment.pdf", path: attachmentPath }]
+              : undefined,
+          });
+          await db.insert(campaignSends).values({
+            campaignId,
+            userId,
+            contactId: contact.id,
+            recipientEmail: email,
+            templateId: template.id,
+            subject,
+            status: "sent",
+            smtpMessageId: delivery.messageId,
+          });
+          await db
+            .insert(deliveryLedger)
+            .values({
+              userId,
+              contactId: contact.id,
+              templateId: template.id,
+              recipientEmail: email,
+              campaignId,
+            })
+            .onConflictDoNothing();
+          sentCount += 1;
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "Failed to send mail.";
+          await db.insert(campaignSends).values({
+            campaignId,
+            userId,
+            contactId: contact.id,
+            recipientEmail: email,
+            templateId: template.id,
+            subject,
+            status: "failed",
+            errorMessage: message,
+          });
+          failedCount += 1;
+        }
       }
+
+      await bumpCampaignProgress(campaignId, {
+        processedCount: sentCount + skippedCount + failedCount,
+        sentCount,
+        failedCount,
+        skippedCount,
+      });
     }
 
-    const recipient = contactToRecipient(contact);
-    const subject = renderTemplate(template.subject, recipient, {
-      name: sender.name,
-      email: sender.email,
-    });
-    const html =
-      template.format === "html" && template.bodyHtml
-        ? renderTemplate(
-            template.bodyHtml,
-            recipient,
-            { name: sender.name, email: sender.email },
-            { html: true },
-          )
-        : undefined;
-    const text =
-      template.bodyText || template.format === "text"
-        ? renderTemplate(
-            template.bodyText ?? template.bodyHtml ?? "",
-            recipient,
-            { name: sender.name, email: sender.email },
-          )
-        : undefined;
-
-    try {
-      const delivery = await sendPersonalMail({
-        config: smtp,
-        to: email,
-        subject,
-        html,
-        text,
-        attachments: attachmentPath
-          ? [{ filename: "attachment.pdf", path: attachmentPath }]
-          : undefined,
-      });
-
-      await db.insert(campaignSends).values({
-        campaignId,
-        userId,
-        contactId: contact.id,
-        recipientEmail: email,
-        templateId: template.id,
-        subject,
-        status: "sent",
-        smtpMessageId: delivery.messageId,
-      });
-
-      await db
-        .insert(deliveryLedger)
-        .values({
-          userId,
-          contactId: contact.id,
-          templateId: template.id,
-          recipientEmail: email,
-          campaignId,
-        })
-        .onConflictDoNothing();
-
-      sentCount += 1;
-      results.push({ email, status: "sent" });
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "Failed to send mail.";
-      await db.insert(campaignSends).values({
-        campaignId,
-        userId,
-        contactId: contact.id,
-        recipientEmail: email,
-        templateId: template.id,
-        subject,
-        status: "failed",
-        errorMessage: message,
-      });
-      failedCount += 1;
-      results.push({ email, status: "failed", error: message });
-    }
-
-    await bumpCampaignProgress(campaignId, {
-      processedCount: results.length,
-      sentCount,
-      failedCount,
-      skippedCount,
-    });
+    await db
+      .update(campaigns)
+      .set({ status: failedCount > 0 ? "failed" : "completed", completedAt: new Date() })
+      .where(eq(campaigns.id, campaignId));
+  } catch (error) {
+    // Unexpected (e.g. database) error: never leave the campaign "running".
+    await db
+      .update(campaigns)
+      .set({ status: "failed", completedAt: new Date() })
+      .where(eq(campaigns.id, campaignId));
+    throw error;
+  } finally {
+    mailer.close();
   }
-
-  const failed = results.some((row) => row.status === "failed");
-  await db
-    .update(campaigns)
-    .set({
-      status: failed ? "failed" : "completed",
-      completedAt: new Date(),
-    })
-    .where(eq(campaigns.id, campaignId));
 
   return {
     campaignId,
-    total: results.length,
-    sent: results.filter((row) => row.status === "sent").length,
-    skipped: results.filter((row) => row.status === "skipped").length,
-    failed: results.filter((row) => row.status === "failed").length,
-    results,
+    total: sentCount + skippedCount + failedCount,
+    sent: sentCount,
+    skipped: skippedCount,
+    failed: failedCount,
   };
 }
 
@@ -389,11 +395,114 @@ export async function listCampaignHistory(
   };
 }
 
-export async function listCampaigns(userId: string) {
+export async function listCampaigns(userId: string, limit = 100) {
   const db = getDb();
   return db
-    .select()
+    .select({
+      id: campaigns.id,
+      name: campaigns.name,
+      status: campaigns.status,
+      recipientMode: campaigns.recipientMode,
+      totalRecipients: campaigns.totalRecipients,
+      processedCount: campaigns.processedCount,
+      sentCount: campaigns.sentCount,
+      failedCount: campaigns.failedCount,
+      skippedCount: campaigns.skippedCount,
+      createdAt: campaigns.createdAt,
+      startedAt: campaigns.startedAt,
+      completedAt: campaigns.completedAt,
+      templateName: templates.name,
+    })
     .from(campaigns)
+    .leftJoin(templates, eq(templates.id, campaigns.templateId))
     .where(eq(campaigns.userId, userId))
-    .orderBy(campaigns.createdAt);
+    .orderBy(desc(campaigns.createdAt))
+    .limit(limit);
+}
+
+/** Returns a user-facing error if the campaign can't be started, else null. */
+export async function preflightCampaign(userId: string, input: CampaignInput) {
+  const template = await getTemplate(userId, input.templateId);
+  if (!template) return "That template no longer exists.";
+  const profile = await getSmtpForSend(userId, input.smtpProfileId);
+  if (!profile) return "Choose a verified sender. Verify it in Setup first.";
+
+  let count = 0;
+  if (input.recipientMode === "all") count = (await listContacts(userId)).length;
+  else if (input.recipientMode === "filter") {
+    count = input.companyFilter?.trim()
+      ? (await listContactsByCompany(userId, input.companyFilter.trim())).length
+      : 0;
+  } else count = (await getContactsByIds(userId, input.contactIds ?? [])).length;
+  return count === 0 ? "No recipients match this audience." : null;
+}
+
+export async function getCampaignDetail(
+  userId: string,
+  campaignId: string,
+  query: { page?: number; status?: "sent" | "skipped" | "failed" } = {},
+) {
+  const db = getDb();
+  const [campaign] = await db
+    .select({
+      id: campaigns.id,
+      name: campaigns.name,
+      status: campaigns.status,
+      recipientMode: campaigns.recipientMode,
+      companyFilter: campaigns.companyFilter,
+      skipAlreadySent: campaigns.skipAlreadySent,
+      totalRecipients: campaigns.totalRecipients,
+      processedCount: campaigns.processedCount,
+      sentCount: campaigns.sentCount,
+      failedCount: campaigns.failedCount,
+      skippedCount: campaigns.skippedCount,
+      createdAt: campaigns.createdAt,
+      startedAt: campaigns.startedAt,
+      completedAt: campaigns.completedAt,
+      templateName: templates.name,
+      templateSubject: templates.subject,
+    })
+    .from(campaigns)
+    .leftJoin(templates, eq(templates.id, campaigns.templateId))
+    .where(and(eq(campaigns.id, campaignId), eq(campaigns.userId, userId)))
+    .limit(1);
+  if (!campaign) return null;
+
+  const pageSize = 25;
+  const page = Math.max(query.page ?? 1, 1);
+  const where = and(
+    eq(campaignSends.campaignId, campaignId),
+    eq(campaignSends.userId, userId),
+    query.status ? eq(campaignSends.status, query.status) : undefined,
+  );
+  const [sends, [totalRow]] = await Promise.all([
+    db
+      .select({
+        id: campaignSends.id,
+        recipientEmail: campaignSends.recipientEmail,
+        subject: campaignSends.subject,
+        status: campaignSends.status,
+        errorMessage: campaignSends.errorMessage,
+        sentAt: campaignSends.sentAt,
+      })
+      .from(campaignSends)
+      .where(where)
+      .orderBy(desc(campaignSends.sentAt))
+      .limit(pageSize)
+      .offset((page - 1) * pageSize),
+    db.select({ value: count() }).from(campaignSends).where(where),
+  ]);
+  const total = totalRow?.value ?? 0;
+  const stalled =
+    campaign.status === "running" &&
+    Date.now() - (campaign.startedAt?.getTime() ?? 0) > STALL_AFTER_MS;
+
+  return {
+    campaign: { ...campaign, stalled },
+    sends,
+    page,
+    pageSize,
+    total,
+    pageCount: Math.max(Math.ceil(total / pageSize), 1),
+  };
 }

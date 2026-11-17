@@ -53,3 +53,16 @@ Select, Checkbox, Dialog = centered ≥sm / bottom sheet on mobile, Badge status
 - Campaigns whose server process dies mid-run stay `running` forever (no heartbeat/recovery) — needs a product decision.
 - Dark mode removed: tokens existed but nothing ever applied the `.dark` class.
 - Campaign detail page and campaign cancel/resume are not implemented (no backend support).
+
+## Round 2 additions
+- **Smart contact import** (`src/lib/contacts/parse.ts`, shared by preview and API): any mix of commas, spaces,
+  semicolons, tabs, pipes and newlines; `Name <email>`, `"Last, First" <email>`, `email (Name)`; CSV with header row
+  (comma/semicolon/tab); names guessed from dotted/underscored addresses (`john.doe@` → John Doe; team mailboxes such
+  as `info@` stay blank); optional company-for-all. Existing contacts only have blank fields filled, never overwritten.
+  Batched inserts (≤5000 per import). File upload (.csv/.tsv/.txt) and CSV export (formula-injection safe).
+- **Templates:** edit, duplicate, live preview (HTML in a sandboxed iframe), "send test to me" via a verified sender.
+- **Campaigns:** list + detail pages (live progress, per-recipient results, status filter, pagination), retry failed,
+  resume stalled runs without duplicating sends, preflight validation (template / verified sender / recipients).
+- **Sending engine:** one pooled SMTP connection per run, `maxDuration = 300`, crashes mark a campaign `failed`.
+- **Needs a schema migration (not done):** tags/groups, unsubscribe + suppression list, scheduled sends, per-user
+  daily send limits, open/click tracking.

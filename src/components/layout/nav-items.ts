@@ -5,6 +5,7 @@ import {
   Settings2Icon,
   UsersIcon,
   BookUserIcon,
+  MailsIcon,
   type LucideIcon,
 } from "lucide-react";
 
@@ -18,6 +19,7 @@ export type NavItem = {
 export const navItems: NavItem[] = [
   { href: "/", label: "Overview", title: "Overview", icon: LayoutDashboardIcon },
   { href: "/send", label: "Send", title: "New campaign", icon: SendIcon },
+  { href: "/campaigns", label: "Campaigns", title: "Campaigns", icon: MailsIcon },
   { href: "/contacts", label: "Contacts", title: "Contacts", icon: BookUserIcon },
   { href: "/history", label: "History", title: "Send history", icon: HistoryIcon },
   { href: "/setup", label: "Setup", title: "Setup", icon: Settings2Icon },

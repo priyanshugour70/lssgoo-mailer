@@ -1,6 +1,7 @@
 import "server-only";
 
 import nodemailer from "nodemailer";
+import type SMTPPool from "nodemailer/lib/smtp-pool";
 import type SMTPTransport from "nodemailer/lib/smtp-transport";
 
 export type SmtpConfig = {
@@ -64,4 +65,37 @@ export async function sendPersonalMail(input: {
   } finally {
     transport.close();
   }
+}
+
+type MailInput = {
+  to: string;
+  subject: string;
+  html?: string;
+  text?: string;
+  attachments?: { filename: string; path: string }[];
+};
+
+/**
+ * One pooled connection for a whole campaign. Opening a new SMTP connection
+ * per message is slow and trips provider connection limits.
+ */
+export function createMailer(config: SmtpConfig) {
+  const transport = nodemailer.createTransport({
+    host: config.host,
+    port: config.port,
+    secure: config.secure,
+    pool: true,
+    maxConnections: 2,
+    auth: { user: config.username, pass: config.password },
+  } satisfies SMTPPool.Options);
+  const from = config.fromName
+    ? `"${config.fromName}" <${config.fromEmail}>`
+    : config.fromEmail;
+  return {
+    async send(input: MailInput) {
+      const info = await transport.sendMail({ from, ...input });
+      return { ok: true as const, messageId: info.messageId ?? null };
+    },
+    close: () => transport.close(),
+  };
 }
