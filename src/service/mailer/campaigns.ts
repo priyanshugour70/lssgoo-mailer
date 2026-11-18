@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, count, desc, eq, ilike, or } from "drizzle-orm";
+import { and, count, desc, eq, ilike, or, sql } from "drizzle-orm";
 
 import { getDb } from "@/lib/db/client";
 import {
@@ -17,6 +17,8 @@ import {
   renderTemplate,
 } from "@/lib/mail/template-render";
 import { createMailer } from "@/lib/mail/smtp-transport";
+import { unsubscribeUrl } from "@/lib/mail/unsubscribe-token";
+import { suppressedSet } from "./suppressions";
 
 import { getContactsByIds, listContacts, listContactsByCompany } from "./contacts";
 import { getUploadedFile } from "./files";
@@ -165,7 +167,7 @@ export async function runCampaign(
         error: "This campaign is still sending. You can resume it if it hasn't moved in a few minutes." as const,
       };
     }
-  } else if (options.resume && campaign.status !== "failed") {
+  } else if (options.resume && campaign.status !== "failed" && campaign.status !== "cancelled") {
     return { error: "Only stalled or failed campaigns can be resumed." as const };
   }
 
@@ -225,13 +227,38 @@ export async function runCampaign(
 
   const mailer = createMailer(smtp);
   const senderInfo = { name: sender.name, email: sender.email };
+  let cancelled = false;
+  const suppressed = await suppressedSet(userId);
 
   try {
     for (const contact of recipients) {
       const email = contact.email.toLowerCase();
       if (done.has(email)) continue;
 
-      if (campaign.skipAlreadySent && (await alreadySent(userId, template.id, email))) {
+      // Stop promptly when the user cancels from the campaign page.
+      const [live] = await db
+        .select({ status: campaigns.status })
+        .from(campaigns)
+        .where(eq(campaigns.id, campaignId))
+        .limit(1);
+      if (!live || live.status !== "running") {
+        cancelled = true;
+        break;
+      }
+
+      if (suppressed.has(email)) {
+        await db.insert(campaignSends).values({
+          campaignId,
+          userId,
+          contactId: contact.id,
+          recipientEmail: email,
+          templateId: template.id,
+          subject: template.subject,
+          status: "skipped",
+          errorMessage: "On your suppression list (unsubscribed or blocked).",
+        });
+        skippedCount += 1;
+      } else if (campaign.skipAlreadySent && (await alreadySent(userId, template.id, email))) {
         await db.insert(campaignSends).values({
           campaignId,
           userId,
@@ -245,14 +272,15 @@ export async function runCampaign(
         skippedCount += 1;
       } else {
         const recipient = contactToRecipient(contact);
+        const optOut = unsubscribeUrl(userId, email);
         const subject = renderTemplate(template.subject, recipient, senderInfo);
         const html =
           template.format === "html" && template.bodyHtml
-            ? renderTemplate(template.bodyHtml, recipient, senderInfo, { html: true })
+            ? renderTemplate(template.bodyHtml, recipient, senderInfo, { html: true, unsubscribeUrl: optOut })
             : undefined;
         const text =
           template.bodyText || template.format === "text"
-            ? renderTemplate(template.bodyText ?? template.bodyHtml ?? "", recipient, senderInfo)
+            ? renderTemplate(template.bodyText ?? template.bodyHtml ?? "", recipient, senderInfo, { unsubscribeUrl: optOut })
             : undefined;
 
         try {
@@ -261,6 +289,10 @@ export async function runCampaign(
             subject,
             html,
             text,
+            headers: {
+              "List-Unsubscribe": `<${optOut}>`,
+              "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+            },
             attachments: attachmentPath
               ? [{ filename: "attachment.pdf", path: attachmentPath }]
               : undefined,
@@ -310,10 +342,12 @@ export async function runCampaign(
       });
     }
 
-    await db
-      .update(campaigns)
-      .set({ status: failedCount > 0 ? "failed" : "completed", completedAt: new Date() })
-      .where(eq(campaigns.id, campaignId));
+    if (!cancelled) {
+      await db
+        .update(campaigns)
+        .set({ status: failedCount > 0 ? "failed" : "completed", completedAt: new Date() })
+        .where(and(eq(campaigns.id, campaignId), eq(campaigns.status, "running")));
+    }
   } catch (error) {
     // Unexpected (e.g. database) error: never leave the campaign "running".
     await db
@@ -505,4 +539,52 @@ export async function getCampaignDetail(
     total,
     pageCount: Math.max(Math.ceil(total / pageSize), 1),
   };
+}
+
+/** Stops a running campaign; already-sent mail is unaffected and it can be resumed. */
+export async function cancelCampaign(userId: string, campaignId: string) {
+  const db = getDb();
+  const rows = await db
+    .update(campaigns)
+    .set({ status: "cancelled", completedAt: new Date() })
+    .where(
+      and(
+        eq(campaigns.id, campaignId),
+        eq(campaigns.userId, userId),
+        eq(campaigns.status, "running"),
+      ),
+    )
+    .returning({ id: campaigns.id });
+  return rows.length > 0;
+}
+
+/** Deletes a campaign and its per-recipient log. Running campaigns can't be deleted. */
+export async function deleteCampaign(userId: string, campaignId: string) {
+  const db = getDb();
+  const rows = await db
+    .delete(campaigns)
+    .where(
+      and(
+        eq(campaigns.id, campaignId),
+        eq(campaigns.userId, userId),
+        sql`${campaigns.status} <> 'running'`,
+      ),
+    )
+    .returning({ id: campaigns.id });
+  return rows.length > 0;
+}
+
+export async function listCampaignSendsForExport(userId: string, campaignId: string) {
+  const db = getDb();
+  return db
+    .select({
+      email: campaignSends.recipientEmail,
+      status: campaignSends.status,
+      subject: campaignSends.subject,
+      error: campaignSends.errorMessage,
+      sentAt: campaignSends.sentAt,
+    })
+    .from(campaignSends)
+    .where(and(eq(campaignSends.campaignId, campaignId), eq(campaignSends.userId, userId)))
+    .orderBy(desc(campaignSends.sentAt));
 }

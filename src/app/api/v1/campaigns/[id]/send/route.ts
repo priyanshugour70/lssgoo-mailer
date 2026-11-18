@@ -26,7 +26,7 @@ export async function POST(
   if (campaign.status === "running" && !campaign.stalled) {
     return NextResponse.json({ error: "This campaign is still sending." }, { status: 409 });
   }
-  if (resume && campaign.status !== "failed" && !campaign.stalled) {
+  if (resume && campaign.status !== "failed" && campaign.status !== "cancelled" && !campaign.stalled) {
     return NextResponse.json(
       { error: "Only stalled or failed campaigns can be resumed." },
       { status: 409 },

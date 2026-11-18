@@ -291,3 +291,19 @@ export const deliveryLedger = mailer.table(
     ),
   ],
 );
+
+export const suppressions = mailer.table(
+  "suppressions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    email: text("email").notNull(),
+    reason: text("reason").notNull().default("manual"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [index("suppressions_user_idx").on(table.userId)],
+);

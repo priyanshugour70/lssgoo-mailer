@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { requireApiUser } from "@/lib/api/require-user";
-import { getCampaignDetail } from "@/service/mailer/campaigns";
+import { deleteCampaign, getCampaignDetail } from "@/service/mailer/campaigns";
 
 const querySchema = z.object({
   page: z.coerce.number().int().min(1).catch(1),
@@ -23,4 +23,24 @@ export async function GET(
   const detail = await getCampaignDetail(auth.user.id, id, query);
   if (!detail) return NextResponse.json({ error: "not_found" }, { status: 404 });
   return NextResponse.json(detail);
+}
+
+export async function DELETE(
+  _request: Request,
+  context: { params: Promise<{ id: string }> },
+) {
+  const auth = await requireApiUser();
+  if (auth.response) return auth.response;
+  const { id } = await context.params;
+  if (!z.string().uuid().safeParse(id).success) {
+    return NextResponse.json({ error: "not_found" }, { status: 404 });
+  }
+  const removed = await deleteCampaign(auth.user.id, id);
+  if (!removed) {
+    return NextResponse.json(
+      { error: "Campaign not found, or it is still sending. Cancel it first." },
+      { status: 409 },
+    );
+  }
+  return NextResponse.json({ ok: true });
 }

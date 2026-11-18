@@ -20,7 +20,7 @@ export function renderTemplate(
   source: string,
   recipient: TemplateRecipient,
   sender: { name: string; email: string },
-  options: { html?: boolean } = {},
+  options: { html?: boolean; unsubscribeUrl?: string } = {},
 ) {
   const map: Record<string, string> = {
     firstName: recipient.firstName ?? "",
@@ -29,6 +29,7 @@ export function renderTemplate(
     company: recipient.company ?? "",
     senderName: sender.name,
     senderEmail: sender.email,
+    unsubscribeUrl: options.unsubscribeUrl ?? "",
   };
 
   const escape = (value: string) =>

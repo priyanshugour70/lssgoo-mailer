@@ -9,6 +9,7 @@ const variants = {
   pending: "warning",
   skipped: "neutral",
   draft: "neutral",
+  cancelled: "neutral",
   rejected: "destructive",
   failed: "destructive",
   "not validated": "warning",

@@ -3,7 +3,7 @@ import { z } from "zod";
 
 import { requireApiUser } from "@/lib/api/require-user";
 import { MAX_IMPORT, parseContacts } from "@/lib/contacts/parse";
-import { bulkImportContacts, deleteContacts } from "@/service/mailer/contacts";
+import { bulkImportContacts, deleteContacts, setCompanyForContacts } from "@/service/mailer/contacts";
 
 const importSchema = z.object({
   raw: z.string().min(1).max(2_000_000),
@@ -61,4 +61,20 @@ export async function DELETE(request: Request) {
   }
   const removed = await deleteContacts(auth.user.id, parsed.data.ids);
   return NextResponse.json({ removed });
+}
+
+const companySchema = z.object({
+  ids: z.array(z.string().uuid()).min(1).max(1000),
+  company: z.string().max(200).nullable(),
+});
+
+export async function PATCH(request: Request) {
+  const auth = await requireApiUser();
+  if (auth.response) return auth.response;
+  const parsed = companySchema.safeParse(await request.json().catch(() => null));
+  if (!parsed.success) {
+    return NextResponse.json({ error: "invalid_body" }, { status: 400 });
+  }
+  const updated = await setCompanyForContacts(auth.user.id, parsed.data.ids, parsed.data.company);
+  return NextResponse.json({ updated });
 }

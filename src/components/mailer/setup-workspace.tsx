@@ -71,7 +71,7 @@ type Template = {
 };
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const PLACEHOLDERS = ["firstName", "lastName", "company", "email", "senderName", "senderEmail"];
+const PLACEHOLDERS = ["firstName", "lastName", "company", "email", "senderName", "senderEmail", "unsubscribeUrl"];
 
 export function SetupWorkspace() {
   const tab = useTab<"smtp" | "templates">("smtp");
@@ -761,12 +761,12 @@ function TemplatePreviewPane({
         <iframe
           title="Email preview"
           sandbox=""
-          srcDoc={renderTemplate(body, SAMPLE, sender, { html: true })}
+          srcDoc={renderTemplate(body, SAMPLE, sender, { html: true, unsubscribeUrl: "https://example.com/unsubscribe" })}
           className="h-72 w-full rounded-b-xl bg-white"
         />
       ) : (
         <pre className="max-h-72 overflow-auto px-3 pb-3 text-sm whitespace-pre-wrap">
-          {renderTemplate(body, SAMPLE, sender) || "(empty)"}
+          {renderTemplate(body, SAMPLE, sender, { unsubscribeUrl: "https://example.com/unsubscribe" }) || "(empty)"}
         </pre>
       )}
     </div>

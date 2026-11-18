@@ -73,6 +73,7 @@ type MailInput = {
   html?: string;
   text?: string;
   attachments?: { filename: string; path: string }[];
+  headers?: Record<string, string>;
 };
 
 /**

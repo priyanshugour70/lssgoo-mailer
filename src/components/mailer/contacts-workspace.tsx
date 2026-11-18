@@ -43,6 +43,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { SuppressionList } from "@/components/mailer/suppression-list";
 import { MAX_IMPORT, parseContacts } from "@/lib/contacts/parse";
 import { useMailerFetch } from "@/hooks/use-mailer-fetch";
 import { useUrlState } from "@/hooks/use-url-state";
@@ -82,7 +83,7 @@ function matches(contact: Contact, q: string) {
 
 export function ContactsWorkspace() {
   const url = useUrlState();
-  const tab = useTab<"mine" | "shared">("mine");
+  const tab = useTab<"mine" | "shared" | "blocked">("mine");
   const query = url.get("q");
   const page = Math.max(Number(url.get("page", "1")) || 1, 1);
   const sort = url.get("sort", "newest") as SortKey;
@@ -105,6 +106,7 @@ export function ContactsWorkspace() {
         options={[
           { value: "mine", label: "My contacts", count: mine.data?.contacts.length },
           { value: "shared", label: "Shared with me", count: shared.data?.shared.length },
+          { value: "blocked", label: "Blocked" },
         ]}
       />
 
@@ -121,6 +123,8 @@ export function ContactsWorkspace() {
           onQuery={setQuery}
           onPage={(next) => url.set({ page: next === 1 ? null : String(next) })}
         />
+      ) : tab === "blocked" ? (
+        <SuppressionList />
       ) : (
         <SharedContacts
           rows={shared.data?.shared ?? []}
@@ -167,6 +171,7 @@ function MyContacts({
   const [editing, setEditing] = useState<Contact | "new" | null>(null);
   const [importing, setImporting] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkCompany, setBulkCompany] = useState("");
 
   const filtered = useMemo(() => {
     const list = contacts.filter((c) => matches(c, query));
@@ -208,6 +213,25 @@ function MyContacts({
       await reload();
     } catch (err) {
       toast.error(errorMessage(err, "Could not delete."));
+    }
+  }
+
+  async function applyCompany() {
+    try {
+      const result = await api<{ updated: number }>("/api/v1/contacts/bulk", {
+        method: "PATCH",
+        body: { ids: [...selected], company: bulkCompany.trim() || null },
+      });
+      toast.success(
+        bulkCompany.trim()
+          ? `Set company on ${result.updated} contact${result.updated === 1 ? "" : "s"}.`
+          : `Cleared company on ${result.updated} contact${result.updated === 1 ? "" : "s"}.`,
+      );
+      setBulkCompany("");
+      setSelected(new Set());
+      await reload();
+    } catch (err) {
+      toast.error(errorMessage(err, "Could not update."));
     }
   }
 
@@ -261,9 +285,27 @@ function MyContacts({
         <div
           role="region"
           aria-label="Bulk actions"
-          className="flex items-center justify-between gap-3 rounded-xl bg-primary px-3 py-2 text-primary-foreground"
+          className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-primary px-3 py-2 text-primary-foreground"
         >
           <p className="text-sm font-medium tabular-nums">{selected.size} selected</p>
+          <form
+            className="flex min-w-0 flex-1 gap-1 sm:max-w-xs"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void applyCompany();
+            }}
+          >
+            <Input
+              aria-label="Company for selected contacts"
+              placeholder="Set company…"
+              value={bulkCompany}
+              onChange={(event) => setBulkCompany(event.target.value)}
+              className="h-8 bg-background text-foreground"
+            />
+            <Button type="submit" size="sm" variant="secondary">
+              Apply
+            </Button>
+          </form>
           <div className="flex gap-1">
             <Button
               size="sm"

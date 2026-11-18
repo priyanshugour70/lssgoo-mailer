@@ -186,3 +186,18 @@ export async function getContactsByIds(ownerId: string, ids: string[]) {
     .from(contacts)
     .where(and(eq(contacts.ownerId, ownerId), inArray(contacts.id, ids)));
 }
+/** Sets (or clears, with null) the company on many contacts at once. */
+export async function setCompanyForContacts(
+  ownerId: string,
+  ids: string[],
+  company: string | null,
+) {
+  if (ids.length === 0) return 0;
+  const db = getDb();
+  const rows = await db
+    .update(contacts)
+    .set({ company: company?.trim() || null, updatedAt: new Date() })
+    .where(and(eq(contacts.ownerId, ownerId), inArray(contacts.id, ids)))
+    .returning({ id: contacts.id });
+  return rows.length;
+}

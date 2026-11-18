@@ -3,13 +3,14 @@ import { NextResponse, type NextRequest } from "next/server";
 import { SESSION_COOKIE } from "@/lib/auth/constants";
 import { openSession } from "@/lib/auth/session-token";
 
-const publicPaths = new Set(["/sign-in"]);
+const publicPaths = new Set(["/sign-in", "/unsubscribe"]);
 
 function isPublic(path: string) {
   return (
     publicPaths.has(path) ||
     path.startsWith("/api/v1/auth") ||
-    path.startsWith("/api/v1/health")
+    path.startsWith("/api/v1/health") ||
+    path.startsWith("/api/v1/unsubscribe")
   );
 }
 

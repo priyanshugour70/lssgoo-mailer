@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { ArrowLeftIcon, RefreshCwIcon, RotateCcwIcon } from "lucide-react";
+import { ArrowLeftIcon, DownloadIcon, OctagonXIcon, RefreshCwIcon, RotateCcwIcon, Trash2Icon } from "lucide-react";
+import { useRouter } from "next/navigation";
 
 import { EmptyState, ErrorState } from "@/components/app/empty-state";
 import { ListSkeleton } from "@/components/app/list-skeleton";
@@ -12,7 +13,7 @@ import { useConfirm, useToast } from "@/components/app/providers";
 import { StatusBadge } from "@/components/app/status-badge";
 import { UrlTabs, useTab } from "@/components/app/url-tabs";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -60,6 +61,7 @@ export function CampaignDetail({ id }: { id: string }) {
   const status = useTab<Filter>("all", "status");
   const page = Math.max(Number(url.get("page", "1")) || 1, 1);
   const [acting, setActing] = useState(false);
+  const router = useRouter();
 
   const params = new URLSearchParams();
   if (status !== "all") params.set("status", status);
@@ -101,9 +103,45 @@ export function CampaignDetail({ id }: { id: string }) {
     }
   }
 
+  async function cancel() {
+    const ok = await confirm({
+      title: "Stop this campaign?",
+      description:
+        "Sending stops after the email currently in progress. Anyone who already got it keeps it, and you can resume later without duplicates.",
+      confirmLabel: "Stop sending",
+      destructive: true,
+    });
+    if (!ok) return;
+    try {
+      await api(`/api/v1/campaigns/${id}/cancel`, { method: "POST" });
+      toast.success("Campaign stopped.");
+      await reload();
+    } catch (err) {
+      toast.error(errorMessage(err));
+    }
+  }
+
+  async function remove() {
+    const ok = await confirm({
+      title: "Delete this campaign?",
+      description:
+        "The campaign and its per-recipient log are removed. Contacts and templates are untouched, and emails already sent can't be recalled.",
+      confirmLabel: "Delete",
+      destructive: true,
+    });
+    if (!ok) return;
+    try {
+      await api(`/api/v1/campaigns/${id}`, { method: "DELETE" });
+      toast.success("Campaign deleted.");
+      router.push("/campaigns");
+    } catch (err) {
+      toast.error(errorMessage(err));
+    }
+  }
+
   const total = campaign?.totalRecipients ?? 0;
   const pct = total ? Math.round((campaign!.processedCount / total) * 100) : 0;
-  const canResume = campaign && (campaign.stalled || campaign.status === "failed");
+  const canResume = campaign && (campaign.stalled || campaign.status === "failed" || campaign.status === "cancelled");
 
   return (
     <Page>
@@ -134,6 +172,27 @@ export function CampaignDetail({ id }: { id: string }) {
                   <RefreshCwIcon data-icon="inline-start" />
                   Refresh
                 </Button>
+                {running ? (
+                  <Button variant="outline" size="sm" onClick={() => void cancel()}>
+                    <OctagonXIcon data-icon="inline-start" />
+                    Stop
+                  </Button>
+                ) : (
+                  <Button variant="outline" size="sm" onClick={() => void remove()}>
+                    <Trash2Icon data-icon="inline-start" />
+                    Delete
+                  </Button>
+                )}
+                {data.total > 0 || campaign.sentCount + campaign.failedCount + campaign.skippedCount > 0 ? (
+                  <a
+                    href={`/api/v1/campaigns/${id}/export`}
+                    download
+                    className={buttonVariants({ variant: "outline", size: "sm" })}
+                  >
+                    <DownloadIcon data-icon="inline-start" />
+                    Export
+                  </a>
+                ) : null}
                 {canResume ? (
                   <Button size="sm" loading={acting} onClick={() => void resume()}>
                     {acting ? null : <RotateCcwIcon data-icon="inline-start" />}
